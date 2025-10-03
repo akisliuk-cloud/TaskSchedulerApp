@@ -3,6 +3,29 @@ import SwiftUI
 import Foundation
 import Charts // iOS 16+. If building for iOS 15, see fallback at bottom.
 
+struct CompatEmptyState: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Group {
+            if #available(iOS 17.0, *) {
+                ContentUnavailableView(title, systemImage: systemImage)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text(title)
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var state = AppState()
 
@@ -281,19 +304,19 @@ struct ContentView: View {
                 }
                 Spacer()
                 HStack(spacing: 0) {
-                    Button { state.archiveTask(t) } label {
+                    Button { state.archiveTask(t) } label: {
                         Image(systemName: "archivebox")
                     }
                     .buttonStyle(.borderless)
                     .padding(6)
 
-                    Button { state.duplicate(t) } label {
+                    Button { state.duplicate(t) } label: {
                         Image(systemName: "plus.square.on.square")
                     }
                     .buttonStyle(.borderless)
                     .padding(6)
 
-                    Button { state.deleteToTrash(t) } label {
+                    Button { state.deleteToTrash(t) } label: {
                         Image(systemName: "trash")
                     }
                     .buttonStyle(.borderless)
@@ -450,7 +473,7 @@ private struct DayModalView: View {
             }
 
             if expanded.isEmpty {
-                ContentUnavailableView("No tasks for this day", systemImage: "calendar")
+                ContentUnavailableView(title: "No tasks for this day", systemImage: "calendar")
             } else {
                 ScrollView {
                     VStack(spacing: 8) {
@@ -626,7 +649,7 @@ private struct ArchivesView: View {
 
             let list = state.archivedTasks.filter { $0.archiveReason == state.activeArchiveTab.rawValue }
             if list.isEmpty {
-                ContentUnavailableView("This archive is empty", systemImage: "tray")
+                ContentUnavailableView(title: "This archive is empty", systemImage: "tray")
                     .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 List {
