@@ -12,7 +12,7 @@ targets:
       - path: Resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.taskscheduler
+        PRODUCT_BUNDLE_IDENTIFIER: com.edgx.taskscheduler
         INFOPLIST_FILE: Resources/Info.plist
         SWIFT_VERSION: 5.9
         CURRENT_PROJECT_VERSION: 1
