@@ -78,8 +78,40 @@ workflows:
       - name: Show CFBundleIdentifier inside built .app
         script: |
           set -euo pipefail
-          APP_DIR="$(dirname "$APP_PATH")"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_DIR/TaskSchedulerApp.app/Info.plist" || true
+          APP_NAME="${APP_NAME:-TaskSchedulerApp}"
+
+          # Candidate locations for DerivedData products
+          CANDIDATES=(
+            "ios-app/build_dir/Build/Products/Debug-iphonesimulator"
+            "build_dir/Build/Products/Debug-iphonesimulator"
+          )
+
+          APP_PATH=""
+          for d in "${CANDIDATES[@]}"; do
+            if [ -d "$d" ]; then
+              found="$(/usr/bin/find "$d" -maxdepth 1 -type d -name "${APP_NAME}.app" -print -quit || true)"
+              if [ -n "$found" ]; then
+                APP_PATH="$found"
+                break
+              fi
+            fi
+          done
+
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ Could not locate ${APP_NAME}.app in expected simulator output folders."
+            echo "Contents of candidates (if present):"
+            for d in "${CANDIDATES[@]}"; do
+              echo "--- $d ---"
+              ls -la "$d" || true
+            done
+            exit 1
+          fi
+
+          echo "✅ Found app at: $APP_PATH"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist" || {
+            echo "⚠️ Could not read CFBundleIdentifier from Info.plist"; exit 1;
+          }
+
           
       - name: Upload to Appetize (create new app)
         script: |
