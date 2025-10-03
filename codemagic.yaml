@@ -95,7 +95,8 @@ workflows:
             exit 1
           fi
 
-          LAUNCH_URL="https://appetize.io/app/${PUBLIC_KEY}?device=iphone15pro&osVersion=17.5&scale=75"
+          # Let Appetize pick a compatible device/OS
+          LAUNCH_URL="https://appetize.io/app/${PUBLIC_KEY}?scale=75"
           echo "LAUNCH_URL=${LAUNCH_URL}" >> $CM_ENV
           echo "✅ Open in browser: ${LAUNCH_URL}"
 
