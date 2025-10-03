@@ -6,9 +6,10 @@ workflows:
       groups:
         - appetize
       vars:
-        APP_NAME: "TaskSchedulerApp"                 # Target/Product name
-        SCHEME_NAME: "TaskSchedulerApp"              # Scheme created by XcodeGen
-        WORKSPACE_OR_PROJECT: "TaskSchedulerApp.xcodeproj"
+        # Vars are kept for clarity, but we’ll use explicit paths in scripts to avoid UI resets
+        APP_NAME: "TaskSchedulerApp"
+        SCHEME_NAME: "TaskSchedulerApp"
+        WORKSPACE_OR_PROJECT: "ios-app/TaskSchedulerApp.xcodeproj"
       xcode: 16.1
       cocoapods: default
 
@@ -18,36 +19,47 @@ workflows:
 
       - name: Install XcodeGen
         script: |
+          set -euo pipefail
           brew update
           brew install xcodegen
 
       - name: Generate Xcode project with XcodeGen
         script: |
-          xcodegen generate
-          ls -la
+          set -euo pipefail
+          # Normalize common misnaming
+          [ -f ios-app/project.yaml ] && mv ios-app/project.yaml ios-app/project.yml || true
+
+          # Generate the Xcode project **into ios-app/**
+          xcodegen generate --spec ios-app/project.yml --project ios-app/TaskSchedulerApp.xcodeproj
+
+          echo "After xcodegen:"
+          ls -la ios-app
 
       - name: Build .app for iOS Simulator (unsigned)
         script: |
           set -euo pipefail
-          DERIVED="build_dir"
+          DERIVED="ios-app/build_dir"
+
           xcodebuild \
-            -project "$WORKSPACE_OR_PROJECT" \
-            -scheme "$SCHEME_NAME" \
-            -sdk iphonesimulator \
+            -project "ios-app/TaskSchedulerApp.xcodeproj" \
+            -scheme "TaskSchedulerApp" \
             -configuration Debug \
-            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 15 Pro' \
             -derivedDataPath "$DERIVED" \
+            -destination-timeout 120 \
             build | xcpretty
 
-          APP_PATH="$(/usr/bin/find "$DERIVED/Build/Products/Debug-iphonesimulator" -maxdepth 1 -type d -name "$APP_NAME.app" -print -quit)"
+          APP_PATH="$(/usr/bin/find "$DERIVED/Build/Products/Debug-iphonesimulator" -maxdepth 1 -type d -name "TaskSchedulerApp.app" -print -quit)"
           if [ -z "$APP_PATH" ]; then
-            echo "❌ Could not find $APP_NAME.app in Debug-iphonesimulator."
+            echo "❌ Could not find TaskSchedulerApp.app in Debug-iphonesimulator."
+            echo "Products dir:"; ls -la "$DERIVED/Build/Products" || true
             exit 1
           fi
 
           cd "$(dirname "$APP_PATH")"
-          zip -qry "${APP_NAME}.zip" "${APP_NAME}.app"
-          echo "ZIPPED_APP=$(pwd)/${APP_NAME}.zip" >> $CM_ENV
+          zip -qry "TaskSchedulerApp.zip" "TaskSchedulerApp.app"
+          echo "ZIPPED_APP=$(pwd)/TaskSchedulerApp.zip" >> $CM_ENV
 
       - name: Upload to Appetize (create new app)
         script: |
@@ -75,5 +87,5 @@ workflows:
           echo "✅ Open in browser: ${LAUNCH_URL}"
 
     artifacts:
-      - build_dir/Build/Products/Debug-iphonesimulator/*.app
-      - build_dir/Build/Products/Debug-iphonesimulator/*.zip
+      - ios-app/build_dir/Build/Products/Debug-iphonesimulator/*.app
+      - ios-app/build_dir/Build/Products/Debug-iphonesimulator/*.zip
