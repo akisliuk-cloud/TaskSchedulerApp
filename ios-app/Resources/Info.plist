@@ -12,6 +12,10 @@
   <key>CFBundleVersion</key>
   <string>$(CURRENT_PROJECT_VERSION)</string>
 
+  <!-- Add this: -->
+  <key>CFBundleExecutable</key>
+  <string>$(EXECUTABLE_NAME)</string>
+
   <!-- Launch screen (empty dict uses system default) -->
   <key>UILaunchScreen</key>
   <dict/>
