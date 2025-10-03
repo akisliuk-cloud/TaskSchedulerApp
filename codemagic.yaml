@@ -112,6 +112,52 @@ workflows:
             echo "⚠️ Could not read CFBundleIdentifier from Info.plist"; exit 1;
           }
 
+                - name: Validate built .app for Appetize
+        script: |
+          set -euo pipefail
+          APP_NAME="${APP_NAME:-TaskSchedulerApp}"
+
+          # Locate the .app
+          CANDIDATES=(
+            "ios-app/build_dir/Build/Products/Debug-iphonesimulator"
+            "build_dir/Build/Products/Debug-iphonesimulator"
+          )
+          APP_DIR=""
+          for d in "${CANDIDATES[@]}"; do
+            if [ -d "$d/${APP_NAME}.app" ]; then APP_DIR="$d/${APP_NAME}.app"; break; fi
+          done
+          if [ -z "$APP_DIR" ]; then
+            echo "❌ Could not find ${APP_NAME}.app in Debug-iphonesimulator"; exit 1
+          fi
+          echo "✅ .app found at: $APP_DIR"
+
+          # 1) Info.plist must have critical keys
+          echo "---- Info.plist keys ----"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_DIR/Info.plist" || { echo "❌ CFBundleIdentifier missing"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/Info.plist" || { echo "❌ CFBundleShortVersionString missing"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_DIR/Info.plist" || { echo "❌ CFBundleVersion missing"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_DIR/Info.plist" || { echo "❌ CFBundleExecutable missing"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$APP_DIR/Info.plist" || { echo "❌ CFBundleSupportedPlatforms missing"; exit 1; }
+
+          # 2) Binary must be arm64 simulator
+          EXEC=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_DIR/Info.plist")
+          BIN_PATH="$APP_DIR/$EXEC"
+          if [ ! -f "$BIN_PATH" ]; then
+            echo "❌ Executable not found at $BIN_PATH"; exit 1
+          fi
+          echo "---- Binary architectures ----"
+          lipo -info "$BIN_PATH" || true
+          if ! lipo -info "$BIN_PATH" | grep -q 'arm64'; then
+            echo "❌ Binary is not arm64. Appetize requires arm64 simulator builds."
+            echo "Hint: set ARCHS=arm64 for iphonesimulator or pass -arch arm64 to xcodebuild."
+            exit 1
+          fi
+
+          # 3) Zip content preview
+          echo "---- Zip preview ----"
+          (cd "$(dirname "$APP_DIR")" && zip -qry "${APP_NAME}.zip" "${APP_NAME}.app" && echo "ZIPPED_APP=$(pwd)/${APP_NAME}.zip" >> $CM_ENV)
+          unzip -l "$(dirname "$APP_DIR")/${APP_NAME}.zip" | head -n 20
+
           
       - name: Upload to Appetize (create new app)
         script: |
