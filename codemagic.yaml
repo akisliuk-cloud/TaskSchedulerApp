@@ -48,6 +48,12 @@ workflows:
           ls -la
           popd >/dev/null
 
+      - name: Verify Swift sources exist
+        script: |
+          echo "Swift files under ios-app/Sources:"
+          find ios-app/Sources -type f -name "*.swift" -print
+          test -f ios-app/Sources/TaskModels.swift || (echo "❌ Missing ios-app/Sources/TaskModels.swift" && exit 1)
+          test -f ios-app/Sources/SampleData.swift || (echo "❌ Missing ios-app/Sources/SampleData.swift" && exit 1)
 
       - name: Build .app for iOS Simulator (unsigned)
         script: |
