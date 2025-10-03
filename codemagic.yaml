@@ -31,6 +31,7 @@ workflows:
             xcodegen --version || true
           fi
 
+          
       - name: Generate Xcode project with XcodeGen
         script: |
           set -euo pipefail
@@ -74,6 +75,12 @@ workflows:
           zip -qry "TaskSchedulerApp.zip" "TaskSchedulerApp.app"
           echo "ZIPPED_APP=$(pwd)/TaskSchedulerApp.zip" >> $CM_ENV
 
+      - name: Show CFBundleIdentifier inside built .app
+        script: |
+          set -euo pipefail
+          APP_DIR="$(dirname "$APP_PATH")"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_DIR/TaskSchedulerApp.app/Info.plist" || true
+          
       - name: Upload to Appetize (create new app)
         script: |
           set -euo pipefail
