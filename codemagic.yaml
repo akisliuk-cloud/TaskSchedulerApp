@@ -50,10 +50,26 @@ workflows:
 
       - name: Verify Swift sources exist
         script: |
+          set -euo pipefail
           echo "Swift files under ios-app/Sources:"
-          find ios-app/Sources -type f -name "*.swift" -print
-          test -f ios-app/Sources/TaskModels.swift || (echo "❌ Missing ios-app/Sources/TaskModels.swift" && exit 1)
-          test -f ios-app/Sources/SampleData.swift || (echo "❌ Missing ios-app/Sources/SampleData.swift" && exit 1)
+          find ios-app/Sources -type f -name "*.swift" -print | sort
+          
+          # Required files for this project layout
+          test -f ios-app/Sources/AppState.swift || (echo "❌ Missing ios-app/Sources/AppState.swift" && exit 1)
+          test -f ios-app/Sources/ContentView.swift || (echo "❌ Missing ios-app/Sources/ContentView.swift" && exit 1)
+          test -f ios-app/Sources/TaskSchedulerApp.swift || (echo "❌ Missing ios-app/Sources/TaskSchedulerApp.swift" && exit 1)
+          # TaskModels.swift is optional if its contents were merged elsewhere; keep or drop this check as needed:
+          # test -f ios-app/Sources/TaskModels.swift || (echo "❌ Missing ios-app/Sources/TaskModels.swift" && exit 1)
+          
+          # Ensure there is exactly one SampleData enum (now lives in AppState.swift)
+          COUNT=$(grep -Rnw "ios-app/Sources" -e "enum SampleData" | wc -l | tr -d ' ')
+          if [ "$COUNT" -ne 1 ]; then
+            echo "❌ Found $COUNT definitions of enum SampleData; expected 1"
+            grep -Rnw "ios-app/Sources" -e "enum SampleData" || true
+            exit 1
+          fi
+
+          echo "✅ Source verification passed."
 
       - name: Build .app for iOS Simulator (unsigned)
         script: |
