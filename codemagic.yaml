@@ -112,7 +112,7 @@ workflows:
             echo "⚠️ Could not read CFBundleIdentifier from Info.plist"; exit 1;
           }
 
-                - name: Validate built .app for Appetize
+      - name: Validate built .app for Appetize
         script: |
           set -euo pipefail
           APP_NAME="${APP_NAME:-TaskSchedulerApp}"
