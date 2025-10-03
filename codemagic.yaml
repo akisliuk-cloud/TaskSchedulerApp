@@ -37,11 +37,16 @@ workflows:
           # Normalize common misnaming
           [ -f ios-app/project.yaml ] && mv ios-app/project.yaml ios-app/project.yml || true
 
-          # Generate the Xcode project **into ios-app/**
-          xcodegen generate --spec ios-app/project.yml --project ios-app/TaskSchedulerApp.xcodeproj
-
-          echo "After xcodegen:"
+          echo "Before xcodegen, ios-app contains:"
           ls -la ios-app
+
+          # Generate from inside ios-app (so output lands in ios-app/)
+          pushd ios-app >/dev/null
+          xcodegen generate --spec project.yml
+          echo "After xcodegen, ios-app contains:"
+          ls -la
+          popd >/dev/null
+
 
       - name: Build .app for iOS Simulator (unsigned)
         script: |
