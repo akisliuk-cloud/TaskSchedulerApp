@@ -1,0 +1,50 @@
+workflows:
+  ios_sim_to_appetize:
+    name: iOS Simulator → Appetize
+    max_build_duration: 60
+    environment:
+      groups:
+        - appetize     # imports APPETIZE_API_KEY from the variable group
+      vars:
+        APP_NAME: "TaskSchedulerApp"                # Target/Product name
+        SCHEME_NAME: "TaskSchedulerApp"             # Xcode Scheme
+        WORKSPACE_OR_PROJECT: "TaskSchedulerApp.xcodeproj"  # or .xcworkspace
+      xcode: 16.1
+      cocoapods: default
+    scripts:
+      - name: Show Xcode version
+        script: xcodebuild -version
+      - name: Install pods (if using CocoaPods)
+        script: |
+          if [ -f "Podfile" ]; then
+            gem install cocoapods --no-document || true
+            pod install --repo-update
+          fi
+      - name: Build .app for iOS Simulator (unsigned)
+        script: |
+          set -euo pipefail
+          DERIVED="build_dir"
+          if [[ "$WORKSPACE_OR_PROJECT" == *.xcworkspace ]]; then
+            xcodebuild -workspace "$WORKSPACE_OR_PROJECT" -scheme "$SCHEME_NAME" -sdk iphonesimulator -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath "$DERIVED" build | xcpretty
+          else
+            xcodebuild -project "$WORKSPACE_OR_PROJECT" -scheme "$SCHEME_NAME" -sdk iphonesimulator -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath "$DERIVED" build | xcpretty
+          fi
+          APP_PATH="$(/usr/bin/find "$DERIVED/Build/Products/Debug-iphonesimulator" -maxdepth 1 -type d -name "$APP_NAME.app" -print -quit)"
+          if [ -z "$APP_PATH" ]; then echo "❌ Could not find $APP_NAME.app"; exit 1; fi
+          cd "$(dirname "$APP_PATH")"
+          zip -qry "${APP_NAME}.zip" "${APP_NAME}.app"
+          echo "ZIPPED_APP=$(pwd)/${APP_NAME}.zip" >> $CM_ENV
+      - name: Upload to Appetize (create new app)
+        script: |
+          set -euo pipefail
+          if [ -z "${APPETIZE_API_KEY:-}" ]; then echo "❌ APPETIZE_API_KEY missing"; exit 1; fi
+          RESP=$(curl -sS -X POST "https://api.appetize.io/v1/apps" -H "X-API-KEY: $APPETIZE_API_KEY" -F "file=@${ZIPPED_APP}" -F "platform=ios")
+          echo "Appetize response: $RESP"
+          PUBLIC_KEY=$(echo "$RESP" | jq -r '.publicKey // empty')
+          if [ -z "$PUBLIC_KEY" ]; then echo "❌ No publicKey in response"; exit 1; fi
+          LAUNCH_URL="https://appetize.io/app/${PUBLIC_KEY}?device=iphone15pro&osVersion=17.5&scale=75"
+          echo "LAUNCH_URL=${LAUNCH_URL}" >> $CM_ENV
+          echo "✅ Open in browser: ${LAUNCH_URL}"
+    artifacts:
+      - build_dir/Build/Products/Debug-iphonesimulator/*.app
+      - build_dir/Build/Products/Debug-iphonesimulator/*.zip
