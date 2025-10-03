@@ -17,11 +17,19 @@ workflows:
       - name: Show Xcode version
         script: xcodebuild -version
 
-      - name: Install XcodeGen
+      - name: Install XcodeGen (resilient, no auto-update)
         script: |
           set -euo pipefail
-          brew update
-          brew install xcodegen
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "XcodeGen already installed:"
+            xcodegen --version || true
+          else
+            # Prevent brew from failing due to large/old installs
+            export HOMEBREW_NO_AUTO_UPDATE=1
+            export HOMEBREW_NO_INSTALL_CLEANUP=1
+            brew install xcodegen || brew upgrade xcodegen || true
+            xcodegen --version || true
+          fi
 
       - name: Generate Xcode project with XcodeGen
         script: |
