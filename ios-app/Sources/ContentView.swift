@@ -1,4 +1,3 @@
-// ios-app/Sources/ContentView.swift
 import SwiftUI
 import Foundation
 import Charts
@@ -47,7 +46,6 @@ struct ContentView: View {
     @State private var editRecurrence: Recurrence = .never
 
     // Inbox drag-reorder
-    @State private var draggingInboxId: Int? = nil
     @State private var inboxHoverTarget: Int? = nil
 
     // Calendar scroll
@@ -187,7 +185,6 @@ struct ContentView: View {
 
                 // Filter menu (Open/Started/Done)
                 Menu {
-                    // “Open” maps to .notStarted
                     Toggle(isOn: Binding(
                         get: { state.calendarFilters[.notStarted] ?? true },
                         set: { state.calendarFilters[.notStarted] = $0 }
@@ -208,7 +205,7 @@ struct ContentView: View {
 
                 Divider().frame(height: 22)
 
-                Button("Today") { jumpToToday() }
+                Button("Today") { /* scrolling handled onAppear below */ }
                     .buttonStyle(.borderedProminent)
             }
 
@@ -226,7 +223,7 @@ struct ContentView: View {
                                 DayCard(
                                     day: day,
                                     tasks: list,
-                                    bg: Color(UIColor.systemGray6) // lighter tile color
+                                    bg: Color(UIColor.systemGray6)
                                 ) { showingDay = day }
                                 // drop target: schedule into that day
                                 .onDrop(of: [.plainText], isTargeted: nil) { providers in
@@ -248,7 +245,6 @@ struct ContentView: View {
                         }
                         .padding(.vertical, 2)
                         .onAppear {
-                            // Scroll to today on first appear
                             let today = ISO8601.dateOnly.string(from: Date())
                             withAnimation { proxy.scrollTo(dayCardID(today), anchor: .leading) }
                         }
@@ -321,13 +317,10 @@ struct ContentView: View {
                 CompatEmptyState(title: "No unassigned tasks", systemImage: "tray")
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
-                // Drag & drop reorder + drag to calendar (provider is task id as text)
                 List {
                     ForEach(state.unassignedTasks) { t in
                         inboxRow(t)
-                            .onDrag {
-                                NSItemProvider(object: NSString(string: "\(t.id)"))
-                            }
+                            .onDrag { NSItemProvider(object: NSString(string: "\(t.id)")) }
                             .onDrop(of: [.plainText]) { providers in
                                 handleInboxDrop(on: t, providers: providers)
                             }
@@ -355,49 +348,27 @@ struct ContentView: View {
                     let id = Int(idStr),
                     let t = state.tasks.first(where: { $0.id == id })
                 else { return }
-                DispatchQueue.main.async {
-                    state.moveToInbox(t)
-                }
+                DispatchQueue.main.async { state.moveToInbox(t) }
             })
             return true
         }
     }
 
-    // MARK: Inbox row (compact text, no created-time, no left grip, actions menu)
+    // MARK: Inbox row (compact text, actions menu) + extracted edit form to avoid type-check blowup
     @ViewBuilder private func inboxRow(_ t: TaskItem) -> some View {
         let isEditing = editingTaskId == t.id
         HStack(alignment: .top, spacing: 10) {
             if isEditing {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Task title", text: $editText).textFieldStyle(.roundedBorder)
-                    TextField("Notes", text: $editNotes).textFieldStyle(.roundedBorder)
-                    HStack {
-                        Picker("Status", selection: $editStatus) {
-                            Text("Open").tag(TaskStatus.notStarted)
-                            Text("Started").tag(TaskStatus.started)
-                            Text("Done").tag(TaskStatus.completed)
-                        }.pickerStyle(.segmented)
-                    }
-                    HStack {
-                        Picker("Repeat", selection: $editRecurrence) {
-                            Text("Never").tag(Recurrence.never)
-                            Text("Daily").tag(Recurrence.daily)
-                            Text("Weekly").tag(Recurrence.weekly)
-                            Text("Monthly").tag(Recurrence.monthly)
-                        }.pickerStyle(.segmented)
-                    }
-                    HStack {
-                        Text("Schedule Date")
-                        TextField("yyyy-MM-dd", text: $editDate)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    HStack {
-                        Button("Cancel") { editingTaskId = nil }
-                        Spacer()
-                        Button("Save") { saveEdits(t) }
-                            .buttonStyle(.borderedProminent)
-                    }
-                }
+                InboxEditForm(
+                    t: t,
+                    editText: $editText,
+                    editNotes: $editNotes,
+                    editDate: $editDate,
+                    editStatus: $editStatus,
+                    editRecurrence: $editRecurrence,
+                    onCancel: { editingTaskId = nil },
+                    onSave: { saveEdits(t) }
+                )
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(t.text).font(.subheadline) // reduced font
@@ -406,7 +377,6 @@ struct ContentView: View {
                     }
                 }
                 Spacer()
-                // Single menu for actions
                 Menu {
                     Button(role: .destructive) { state.deleteToTrash(t) } label: {
                         Label("Delete", systemImage: "trash")
@@ -429,7 +399,6 @@ struct ContentView: View {
         .onTapGesture(count: 2) { beginEdit(t) }
     }
 
-    // MARK: - Inbox reorder handling via onDrop plain-text id
     private func handleInboxDrop(on target: TaskItem, providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
         provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
@@ -441,10 +410,9 @@ struct ContentView: View {
                 let toIndex = state.tasks.firstIndex(where: { $0.id == target.id })
             else { return }
             DispatchQueue.main.async {
-                // only reorder among inbox items (date == nil)
                 guard state.tasks[fromIndex].date == nil, state.tasks[toIndex].date == nil else { return }
                 let item = state.tasks.remove(at: fromIndex)
-                state.tasks.insert(item, at: (fromIndex < toIndex) ? toIndex : toIndex)
+                state.tasks.insert(item, at: toIndex)
                 inboxHoverTarget = nil
             }
         }
@@ -481,12 +449,6 @@ struct ContentView: View {
         }
         editingTaskId = nil
     }
-
-    private func jumpToToday() {
-        // NOP here—handled inside ScrollViewReader onAppear for each view
-        // This button exists for UX parity; the views scroll to today by default too.
-        NotificationCenter.default.post(name: .jumpToToday, object: nil)
-    }
 }
 
 // MARK: - Subviews
@@ -515,7 +477,7 @@ private struct DayCard: View {
             }
         }
         .padding(10)
-        .frame(width: 110, height: 140) // smaller
+        .frame(width: 110, height: 140)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(bg)
@@ -561,7 +523,7 @@ private struct DayRow: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(bg) // lighter than panel
+                .fill(bg)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(isToday ? .blue : .clear))
         )
         .onTapGesture { onTap() }
@@ -620,7 +582,9 @@ private struct DayModalView: View {
                     Menu {
                         Button { bulkMoveToInbox(expanded: expanded) } label: { Label("Move to Inbox", systemImage: "tray") }
                         Button { bulkArchive(expanded: expanded) } label: { Label("Archive", systemImage: "archivebox") }
-                        Button(role: .destructive) { bulkDelete(expanded: expanded) } label: { Label("Delete", systemImage: "trash") }
+                        Button("Delete Permanently", role: .destructive) {
+                            bulkDelete(expanded: expanded)
+                        }
                     } label: {
                         Label("Actions", systemImage: "ellipsis.circle")
                     }
@@ -634,7 +598,6 @@ private struct DayModalView: View {
 
     @ViewBuilder private func taskRow(_ t: TaskItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Title row + checkbox selection when “Select” mode
             HStack(spacing: 8) {
                 // Checkbox (not a Toggle)
                 if isBulk {
@@ -706,7 +669,7 @@ private struct DayModalView: View {
                     .buttonStyle(.bordered)
                     .tint(t.status == .completed ? .green : .secondary)
             }
-            .font(.caption) // reduced
+            .font(.caption)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6)))
@@ -769,7 +732,7 @@ private struct ArchivesView: View {
                             selectedIds.removeAll()
                             isSelecting = false
                         }
-                        Button(role: .destructive, "Delete Permanently") {
+                        Button("Delete Permanently", role: .destructive) {
                             for id in selectedIds { state.deletePermanently(id) }
                             selectedIds.removeAll()
                             isSelecting = false
@@ -863,8 +826,7 @@ private struct StatsView: View {
 
     var body: some View {
         let range = periodRange()
-        // Reuse AppState helper to get weekly buckets only for chart; KPI bars will use totals
-        let (series, totals) = state.weeklySeries(lastWeeks: 8)
+        let (series, _) = state.weeklySeries(lastWeeks: 8)
 
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -887,11 +849,11 @@ private struct StatsView: View {
                 .buttonStyle(.bordered)
             }
 
-            // KPI bars (Completed / Started / Open / Total) – started is inferred from tasks
+            // KPI bars (Completed / Started / Open / Total)
             let counts = aggregateCounts(in: range)
             KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
 
-            // Bar chart (kept for visual trend; uses rolling 8 weeks)
+            // Bar chart (rolling 8 weeks)
             GroupBox("Last 8 weeks (trend)") {
                 if #available(iOS 16.0, *) {
                     Chart {
@@ -995,11 +957,7 @@ private struct StatsView: View {
         for t in state.tasks where within(t.date) {
             let rating = t.completedOverrides?[t.date ?? ""]?.rating
             switch t.status {
-            case .notStarted:
-                if rating == .liked { oL += 1 }
-                if rating == .disliked { oD += 1 }
-            case .started:
-                // treat started as open here
+            case .notStarted, .started:
                 if rating == .liked { oL += 1 }
                 if rating == .disliked { oD += 1 }
             case .completed:
@@ -1007,15 +965,8 @@ private struct StatsView: View {
                 if rating == .disliked { dD += 1 }
             }
         }
-        for a in state.archivedTasks where within(a.date) {
-            // ratings for archived items (if ever stored)
-            // deleted bucket:
-            if a.archiveReason == "deleted" {
-                // we don't have per-day override on ArchivedTask; count as 0 unless notes carried tags
-                // keep zero by default
-                _ = ()
-            }
-        }
+        // Archived "deleted" items do not currently carry ratings in the model,
+        // so Deleted stays zero unless you add that to the data model later.
         return (oL, oD, dL, dD, delL, delD)
     }
 }
@@ -1097,6 +1048,51 @@ private struct MenuSheet: View {
     }
 }
 
+// MARK: - Inbox edit form (extracted to keep the main row simple)
+private struct InboxEditForm: View {
+    let t: TaskItem
+    @Binding var editText: String
+    @Binding var editNotes: String
+    @Binding var editDate: String
+    @Binding var editStatus: TaskStatus
+    @Binding var editRecurrence: Recurrence
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Task title", text: $editText).textFieldStyle(.roundedBorder)
+            TextField("Notes", text: $editNotes).textFieldStyle(.roundedBorder)
+            HStack {
+                Picker("Status", selection: $editStatus) {
+                    Text("Open").tag(TaskStatus.notStarted)
+                    Text("Started").tag(TaskStatus.started)
+                    Text("Done").tag(TaskStatus.completed)
+                }.pickerStyle(.segmented)
+            }
+            HStack {
+                Picker("Repeat", selection: $editRecurrence) {
+                    Text("Never").tag(Recurrence.never)
+                    Text("Daily").tag(Recurrence.daily)
+                    Text("Weekly").tag(Recurrence.weekly)
+                    Text("Monthly").tag(Recurrence.monthly)
+                }.pickerStyle(.segmented)
+            }
+            HStack {
+                Text("Schedule Date")
+                TextField("yyyy-MM-dd", text: $editDate)
+                    .textFieldStyle(.roundedBorder)
+            }
+            HStack {
+                Button("Cancel", action: onCancel)
+                Spacer()
+                Button("Save", action: onSave)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+}
+
 // MARK: - Small helpers
 
 private func formatDateTime(_ d: Date?) -> String {
@@ -1108,4 +1104,3 @@ private func formatDateTime(_ d: Date?) -> String {
 }
 
 extension Notification.Name { static let jumpToToday = Notification.Name("jumpToToday") }
-
