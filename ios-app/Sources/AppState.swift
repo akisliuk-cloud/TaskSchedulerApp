@@ -529,5 +529,17 @@ items.append(contentsOf: fixed)
         }
         return items
 
+        extension Array {
+            func partitioned(by predicate: (Element) -> Bool) -> ([Element], [Element]) {
+                var matching: [Element] = []
+                var rest: [Element] = []
+                for e in self {
+                    if predicate(e) { matching.append(e) } else { rest.append(e) }
+                }
+                return (matching, rest)
+            }
+        }
+
+        
     }
 }
