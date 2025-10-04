@@ -76,7 +76,7 @@ final class AppState: ObservableObject {
                 guard let base = t.date else { continue }
                 if t.isRecurring, let rec = t.recurrence {
                     var d = (base.asISODateOnlyUTC ?? Date())
-                    let end = Calendar.current.date(byAdding: .year, value: 1, to: d)!
+                    let end = Calendar.current.date(byAdding: .year, value: 1, to: d) ?? d
                     while d <= end {
                         set.insert(ISO8601.dateOnly.string(from: d))
                         d = Self.step(d, by: rec)
@@ -87,9 +87,11 @@ final class AppState: ObservableObject {
             }
             return set.sorted().map { ds in
                 let d = ds.asISODateOnlyUTC ?? Date()
-                return .init(dateString: ds,
-                             dayName: d.formatted(.dateTime.weekday(.abbreviated)),
-                             dayOfMonth: Calendar.current.component(.day, from: d))
+                return .init(
+                    dateString: ds,
+                    dayName: d.formatted(.dateTime.weekday(.abbreviated)),
+                    dayOfMonth: Calendar.current.component(.day, from: d)
+                )
             }
         }
     }
@@ -99,7 +101,7 @@ final class AppState: ObservableObject {
         var out: [TaskItem] = []
 
         for t in filteredTasks {
-            guard let baseDate = t.date else { continue }
+            guard let baseDate = t.date else { continue } // skip inbox
 
             if t.isRecurring, let rec = t.recurrence {
                 var d = (baseDate.asISODateOnlyUTC ?? Date())
@@ -369,74 +371,128 @@ final class AppState: ObservableObject {
         toggleBulkSelectArchive()
     }
 
-    // MARK: - (Optional) Stats helper API you can call from the view
+    // MARK: - (Optional) Stats helper API (inside AppState)
     struct PeriodStats {
         var total = 0
         var completed = 0
         var open = 0
+        var ratePercent = 0
+
+        // Ratings (counted per scheduled date)
         var likedCompleted = 0
         var dislikedCompleted = 0
         var likedOpen = 0
         var dislikedOpen = 0
+
         var periodLabel = ""
+
+        static let zero = PeriodStats()
     }
 
-    func stats(for range: ClosedRange<Date>, granularity: String) -> (PeriodStats, [String: (completed: Int, open: Int)]) {
-        let all = tasks + archivedTasks.map { a in
-            TaskItem(id: a.id, text: a.text, notes: a.notes, date: a.date,
-                     status: a.status, recurrence: nil, createdAt: a.createdAt,
-                     startedAt: a.startedAt, completedAt: a.completedAt, completedOverrides: nil)
-        }
+    /// Summarize tasks + archive over a date range at a given granularity.
+    /// granularity: "day" | "week" | "month"
+    func stats(
+        for range: ClosedRange<Date>,
+        granularity: String
+    ) -> (PeriodStats, [String: (completed: Int, open: Int)]) {
+
+        // Merge live + archived into a single stream.
+        let all: [TaskItem] =
+            tasks
+            +
+            archivedTasks.map { a in
+                TaskItem(
+                    id: a.id, text: a.text, notes: a.notes, date: a.date,
+                    status: a.status, recurrence: nil, createdAt: a.createdAt,
+                    startedAt: a.startedAt, completedAt: a.completedAt, completedOverrides: nil
+                )
+            }
 
         func dayKey(_ d: Date) -> String { ISO8601.dateOnly.string(from: d) }
-
-        let relevant = all.compactMap { t -> (TaskItem, Date)? in
-            guard let ds = t.date, let d = ds.asISODateOnlyUTC else { return nil }
-            guard range.contains(d) else { return nil }
-            return (t, d)
+        func weekKey(_ d: Date) -> String {
+            let cal = Calendar(identifier: .iso8601)
+            let monday = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)) ?? d
+            return dayKey(monday)
+        }
+        func monthKey(_ d: Date) -> String {
+            let comps = Calendar.current.dateComponents([.year, .month], from: d)
+            return String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
         }
 
-        var buckets: [String: (completed: Int, open: Int)] = [:]
-        var s = PeriodStats()
+        // Filter to scheduled items within range and keep their concrete date
+        let relevant: [(task: TaskItem, date: Date, dateString: String)] =
+            all.compactMap { t in
+                guard let ds = t.date, let d = ds.asISODateOnlyUTC else { return nil }
+                guard range.contains(d) else { return nil }
+                return (t, d, ds)
+            }
 
-        for (t, d) in relevant {
+        var buckets: [String: (completed: Int, open: Int)] = [:]
+        var summary = PeriodStats.zero
+
+        for (t, d, ds) in relevant {
             let key: String
             switch granularity {
-            case "day":
-                key = dayKey(d)
-            case "week":
-                let monday = Calendar.current.date(from: Calendar.current
-                    .dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)) ?? d
-                key = dayKey(monday)
-            case "month":
-                let comps = Calendar.current.dateComponents([.year, .month], from: d)
-                key = String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
-            default:
-                key = dayKey(d)
+            case "week":  key = weekKey(d)
+            case "month": key = monthKey(d)
+            default:      key = dayKey(d)
             }
 
             var cur = buckets[key] ?? (0, 0)
             if t.status == .completed { cur.completed += 1 } else { cur.open += 1 }
             buckets[key] = cur
 
-            let rating = t.completedOverrides?[t.date ?? ""]?.rating
+            // instance-aware rating (recurring via overrides keyed by ds)
+            let rating = t.completedOverrides?[ds]?.rating
             if t.status == .completed {
-                if rating == .liked { s.likedCompleted += 1 }
-                if rating == .disliked { s.dislikedCompleted += 1 }
+                if rating == .liked    { summary.likedCompleted += 1 }
+                if rating == .disliked { summary.dislikedCompleted += 1 }
             } else {
-                if rating == .liked { s.likedOpen += 1 }
-                if rating == .disliked { s.dislikedOpen += 1 }
+                if rating == .liked    { summary.likedOpen += 1 }
+                if rating == .disliked { summary.dislikedOpen += 1 }
             }
         }
 
-        let totals = relevant.reduce(into: (c: 0, o: 0)) { acc, pair in
-            if pair.0.status == .completed { acc.c += 1 } else { acc.o += 1 }
+        // Totals & completion rate
+        let totals = relevant.reduce(into: (c: 0, o: 0)) { acc, triple in
+            if triple.task.status == .completed { acc.c += 1 } else { acc.o += 1 }
         }
-        s.completed = totals.c
-        s.open = totals.o
-        s.total = totals.c + totals.o
+        summary.completed = totals.c
+        summary.open = totals.o
+        summary.total = totals.c + totals.o
+        summary.ratePercent = (summary.total > 0)
+            ? Int(round(Double(summary.completed) / Double(summary.total) * 100.0))
+            : 0
 
-        return (s, buckets)
+        return (summary, buckets)
+    }
+
+    /// Convenience: last N ISO weeks (Mon–Sun). Returns chart-ready series and totals.
+    func weeklySeries(lastWeeks: Int = 8)
+    -> (series: [(label: String, completed: Int, open: Int)],
+        totals: (completed: Int, open: Int, total: Int, ratePercent: Int)) {
+
+        let cal = Calendar(identifier: .iso8601)
+        let now = Date()
+        let startOfThisWeek = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) ?? now
+        let start = cal.date(byAdding: .day, value: -7 * (lastWeeks - 1), to: startOfThisWeek) ?? now
+        let end = cal.date(byAdding: .day, value: 6, to: startOfThisWeek) ?? now  // end of current week
+
+        let (summary, buckets) = stats(for: start...end, granularity: "week")
+
+        var labels: [String] = []
+        for i in stride(from: lastWeeks - 1, through: 0, by: -1) {
+            let weekStart = cal.date(byAdding: .day, value: -7 * i, to: startOfThisWeek) ?? startOfThisWeek
+            labels.append(ISO8601.dateOnly.string(from: weekStart))
+        }
+
+        let series = labels.map { key -> (label: String, completed: Int, open: Int) in
+            let b = buckets[key] ?? (0, 0)
+            let weekNum = cal.component(.weekOfYear, from: key.asISODateOnlyUTC ?? now)
+            return (label: "CW \(weekNum)", completed: b.completed, open: b.open)
+        }
+
+        return (series, (summary.completed, summary.open, summary.total, summary.ratePercent))
     }
 }
 
@@ -589,143 +645,9 @@ enum SampleData {
             )
         }
 
-        // <-- THIS is where return items belongs (INSIDE the function)
         return items
     }
 }
-
-// MARK: - (Optional) Stats helper API you can call from the view
-struct PeriodStats {
-    var total = 0
-    var completed = 0
-    var open = 0
-    var ratePercent = 0
-
-    // Ratings (counted per scheduled date)
-    var likedCompleted = 0
-    var dislikedCompleted = 0
-    var likedOpen = 0
-    var dislikedOpen = 0
-
-    var periodLabel = ""
-
-    static let zero = PeriodStats()
-}
-
-/// Summarize tasks + archive over a date range at a given granularity.
-/// - Parameters:
-///   - range: date window (inclusive)
-///   - granularity: "day" | "week" | "month"
-/// - Returns: (summary totals, buckets keyed by period label -> (completed, open))
-func stats(
-    for range: ClosedRange<Date>,
-    granularity: String
-) -> (PeriodStats, [String: (completed: Int, open: Int)]) {
-
-    // Merge live + archived into a single stream we can reason about.
-    let all: [TaskItem] =
-        tasks
-        +
-        archivedTasks.map { a in
-            TaskItem(
-                id: a.id, text: a.text, notes: a.notes, date: a.date,
-                status: a.status, recurrence: nil, createdAt: a.createdAt,
-                startedAt: a.startedAt, completedAt: a.completedAt, completedOverrides: nil
-            )
-        }
-
-    // Key builders
-    func dayKey(_ d: Date) -> String { ISO8601.dateOnly.string(from: d) }
-    func weekKey(_ d: Date) -> String {
-        let cal = Calendar(identifier: .iso8601)
-        let monday = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)) ?? d
-        return dayKey(monday)
-    }
-    func monthKey(_ d: Date) -> String {
-        let comps = Calendar.current.dateComponents([.year, .month], from: d)
-        return String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
-    }
-
-    // Filter to scheduled items within range and keep their concrete date
-    let relevant: [(task: TaskItem, date: Date, dateString: String)] =
-        all.compactMap { t in
-            guard let ds = t.date, let d = ds.asISODateOnlyUTC else { return nil }
-            guard range.contains(d) else { return nil }
-            return (t, d, ds)
-        }
-
-    var buckets: [String: (completed: Int, open: Int)] = [:]
-    var summary = PeriodStats.zero
-
-    for (t, d, ds) in relevant {
-        // pick bucket key
-        let key: String
-        switch granularity {
-        case "week":  key = weekKey(d)
-        case "month": key = monthKey(d)
-        default:      key = dayKey(d)
-        }
-
-        // bump bucket counts
-        var cur = buckets[key] ?? (0, 0)
-        if t.status == .completed { cur.completed += 1 } else { cur.open += 1 }
-        buckets[key] = cur
-
-        // rating for that scheduled date (instance-aware for recurring via overrides)
-        let rating = t.completedOverrides?[ds]?.rating
-        if t.status == .completed {
-            if rating == .liked    { summary.likedCompleted += 1 }
-            if rating == .disliked { summary.dislikedCompleted += 1 }
-        } else {
-            if rating == .liked    { summary.likedOpen += 1 }
-            if rating == .disliked { summary.dislikedOpen += 1 }
-        }
-    }
-
-    // Totals & completion rate
-    let totals = relevant.reduce(into: (c: 0, o: 0)) { acc, triple in
-        if triple.task.status == .completed { acc.c += 1 } else { acc.o += 1 }
-    }
-    summary.completed = totals.c
-    summary.open = totals.o
-    summary.total = totals.c + totals.o
-    summary.ratePercent = (summary.total > 0)
-        ? Int(round(Double(summary.completed) / Double(summary.total) * 100.0))
-        : 0
-
-    return (summary, buckets)
-}
-
-/// Convenience helper for the Stats screen: last N ISO weeks (Mon–Sun).
-/// Returns a chart-ready series and overall totals with completion rate.
-func weeklySeries(lastWeeks: Int = 8)
--> (series: [(label: String, completed: Int, open: Int)],
-    totals: (completed: Int, open: Int, total: Int, ratePercent: Int)) {
-
-    let cal = Calendar(identifier: .iso8601)
-    let now = Date()
-    let startOfThisWeek = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) ?? now
-    let start = cal.date(byAdding: .day, value: -7 * (lastWeeks - 1), to: startOfThisWeek) ?? now
-    let end = cal.date(byAdding: .day, value: 6, to: startOfThisWeek) ?? now  // end of current week
-
-    let (summary, buckets) = stats(for: start...end, granularity: "week")
-
-    // Build ordered labels for the last N weeks
-    var labels: [String] = []
-    for i in stride(from: lastWeeks - 1, through: 0, by: -1) {
-        let weekStart = cal.date(byAdding: .day, value: -7 * i, to: startOfThisWeek) ?? startOfThisWeek
-        labels.append(ISO8601.dateOnly.string(from: weekStart))
-    }
-
-    let series = labels.map { key -> (label: String, completed: Int, open: Int) in
-        let b = buckets[key] ?? (0, 0)
-        let weekNum = cal.component(.weekOfYear, from: key.asISODateOnlyUTC ?? now)
-        return (label: "CW \(weekNum)", completed: b.completed, open: b.open)
-    }
-
-    return (series, (summary.completed, summary.open, summary.total, summary.ratePercent))
-}
-
 
 // MARK: - Small utility
 extension Array {
