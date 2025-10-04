@@ -134,15 +134,15 @@ struct ContentView: View {
 
                 // status filters
                 HStack(spacing: 6) {
-                    TogglePill("To Do", isOn: Binding(
+                    TogglePill(label: "To Do", isOn: Binding(
                         get: { state.calendarFilters[.notStarted] ?? true },
                         set: { state.calendarFilters[.notStarted] = $0 }
                     ), tint: .blue)
-                    TogglePill("Started", isOn: Binding(
+                    TogglePill(label: "Started", isOn: Binding(
                         get: { state.calendarFilters[.started] ?? true },
                         set: { state.calendarFilters[.started] = $0 }
                     ), tint: .orange)
-                    TogglePill("Done", isOn: Binding(
+                    TogglePill(label: "Done", isOn: Binding(
                         get: { state.calendarFilters[.completed] ?? true },
                         set: { state.calendarFilters[.completed] = $0 }
                     ), tint: .green)
