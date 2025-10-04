@@ -19,6 +19,17 @@ final class AppState: ObservableObject {
     // Calendar window (start ~45 days in past)
     @Published var calendarStartDate: Date = Calendar.current.date(byAdding: .day, value: -45, to: Date()) ?? Date()
 
+    // Bulk-select (Inbox & Archive)
+    @Published var isBulkSelectActiveInbox = false
+    @Published var selectedInboxTaskIds: Set<Int> = []
+
+    @Published var isBulkSelectActiveArchive = false
+    @Published var selectedArchiveTaskIds: Set<Int> = []
+
+    // Stats view toggle
+    @Published var statsViewType: StatsViewType = .summary // .summary or .barchart
+
+
     init() {
         self.tasks = SampleData.generateTasks()
     }
@@ -296,6 +307,69 @@ final class AppState: ObservableObject {
     func emptyArchive(reason: ArchiveTab) {
         archivedTasks.removeAll { $0.archiveReason == reason.rawValue }
     }
+
+
+    func toggleBulkSelectInbox() {
+        isBulkSelectActiveInbox.toggle()
+        selectedInboxTaskIds.removeAll()
+    }
+    
+    func toggleBulkSelectArchive() {
+        isBulkSelectActiveArchive.toggle()
+        selectedArchiveTaskIds.removeAll()
+    }
+    
+    func setAllInboxSelection(_ ids: [Int]) {
+        if selectedInboxTaskIds.count == ids.count {
+            selectedInboxTaskIds.removeAll()
+        } else {
+            selectedInboxTaskIds = Set(ids)
+        }
+    }
+    
+    func archiveSelectedInbox() {
+        guard !selectedInboxTaskIds.isEmpty else { return }
+        let now = Date()
+        let (toArchive, toKeep) = tasks.partitioned { selectedInboxTaskIds.contains($0.id) }
+        tasks = toKeep
+        archivedTasks.append(contentsOf: toArchive.map {
+            ArchivedTask(id: $0.id, text: $0.text, notes: $0.notes, date: $0.date,
+                         status: $0.status, createdAt: $0.createdAt, startedAt: $0.startedAt,
+                         completedAt: $0.completedAt, archivedAt: now, archiveReason: $0.status.rawValue, rating: nil)
+        })
+        toggleBulkSelectInbox()
+    }
+    
+    func deleteSelectedInbox() {
+        guard !selectedInboxTaskIds.isEmpty else { return }
+        let now = Date()
+        let (toDelete, toKeep) = tasks.partitioned { selectedInboxTaskIds.contains($0.id) }
+        tasks = toKeep
+        archivedTasks.append(contentsOf: toDelete.map {
+            ArchivedTask(id: $0.id, text: $0.text, notes: $0.notes, date: $0.date,
+                         status: $0.status, createdAt: $0.createdAt, startedAt: $0.startedAt,
+                         completedAt: $0.completedAt, archivedAt: now, archiveReason: "deleted", rating: nil)
+        })
+        toggleBulkSelectInbox()
+    }
+    
+    func restoreSelectedArchive() {
+        guard !selectedArchiveTaskIds.isEmpty else { return }
+        let (selected, keep) = archivedTasks.partitioned { selectedArchiveTaskIds.contains($0.id) }
+        archivedTasks = keep
+        tasks.append(contentsOf: selected.map {
+            TaskItem(id: $0.id, text: $0.text, notes: $0.notes, date: $0.date,
+                     status: $0.status, recurrence: nil, createdAt: $0.createdAt,
+                     startedAt: $0.startedAt, completedAt: $0.completedAt, completedOverrides: nil)
+        })
+        toggleBulkSelectArchive()
+    }
+    
+    func deleteSelectedArchivePermanently() {
+        guard !selectedArchiveTaskIds.isEmpty else { return }
+        archivedTasks.removeAll { selectedArchiveTaskIds.contains($0.id) }
+        toggleBulkSelectArchive()
+    }
 }
 
 // MARK: - Calendar Day model
@@ -311,6 +385,10 @@ struct CalendarDay: Identifiable, Hashable {
 enum SampleData {
     static func generateTasks() -> [TaskItem] {
         var items: [TaskItem] = []
+
+enum StatsViewType: String, CaseIterable {
+    case summary, barchart
+}
 
 // A few fixed like your top of array
 // --- Safe date helpers (avoid crashes if parsing fails) ---
@@ -450,5 +528,6 @@ items.append(contentsOf: fixed)
             )
         }
         return items
+
     }
 }
