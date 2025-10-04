@@ -473,7 +473,7 @@ private struct DayModalView: View {
             }
 
             if expanded.isEmpty {
-                ContentUnavailableView(title: "No tasks for this day", systemImage: "calendar")
+                ContentUnavailableView("No tasks for this day", systemImage: "calendar")
             } else {
                 ScrollView {
                     VStack(spacing: 8) {
@@ -649,7 +649,7 @@ private struct ArchivesView: View {
 
             let list = state.archivedTasks.filter { $0.archiveReason == state.activeArchiveTab.rawValue }
             if list.isEmpty {
-                ContentUnavailableView(title: "This archive is empty", systemImage: "tray")
+                ContentUnavailableView("This archive is empty", systemImage: "tray")
                     .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 List {
