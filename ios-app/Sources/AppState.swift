@@ -311,16 +311,94 @@ enum SampleData {
     static func generateTasks() -> [TaskItem] {
         var items: [TaskItem] = []
 
-        // A few fixed like your top of array
-        let fixed: [TaskItem] = [
-            TaskItem(id: Int(Date().timeIntervalSince1970)+101, text: "Plan team lunch for next week", notes: "Need to decide on a location and send out a poll.", date: "2025-10-03", status: .notStarted, recurrence: nil, createdAt: Date(), startedAt: nil, completedAt: nil, completedOverrides: nil),
-            TaskItem(id: Int(Date().timeIntervalSince1970)+102, text: "Prepare slides for Monday's presentation", notes: "Focus on Q3 performance metrics.", date: "2025-10-02", status: .started, recurrence: nil, createdAt: ISO8601.dateTime.date(from: "2025-09-30T10:00:00Z")!, startedAt: ISO8601.dateTime.date(from: "2025-10-01T14:00:00Z"), completedAt: nil, completedOverrides: nil),
-            TaskItem(id: Int(Date().timeIntervalSince1970)+103, text: "Submit weekly progress report", notes: "Report was submitted yesterday morning.", date: "2025-10-01", status: .completed, recurrence: nil, createdAt: ISO8601.dateTime.date(from: "2025-09-29T09:00:00Z")!, startedAt: ISO8601.dateTime.date(from: "2025-10-01T09:00:00Z"), completedAt: ISO8601.dateTime.date(from: "2025-10-01T11:30:00Z"), completedOverrides: ["2025-10-01": TaskOverride(status: .completed, startedAt: ISO8601.dateTime.date(from: "2025-10-01T09:00:00Z"), completedAt: ISO8601.dateTime.date(from: "2025-10-01T11:30:00Z"), rating: .liked)]),
-            TaskItem(id: Int(Date().timeIntervalSince1970)+104, text: "Review new design mockups", notes: "Check for mobile responsiveness.", date: "2025-10-02", status: .notStarted, recurrence: nil, createdAt: Date(), startedAt: nil, completedAt: nil, completedOverrides: nil),
-            TaskItem(id: Int(Date().timeIntervalSince1970)+105, text: "Debug issue #5821 on the staging server", notes: "The login page is throwing a 500 error.", date: "2025-10-02", status: .started, recurrence: nil, createdAt: ISO8601.dateTime.date(from: "2025-10-02T08:00:00Z")!, startedAt: ISO8601.dateTime.date(from: "2025-10-02T10:15:00Z"), completedAt: nil, completedOverrides: nil),
-            TaskItem(id: Int(Date().timeIntervalSince1970)+106, text: "Daily Standup Meeting", notes: "", date: "2025-09-01", status: .notStarted, recurrence: .daily, createdAt: ISO8601.dateTime.date(from: "2025-08-01T09:00:00Z")!, startedAt: nil, completedAt: nil, completedOverrides: [:])
+// A few fixed like your top of array
+// --- Safe date helpers (avoid crashes if parsing fails) ---
+func d(_ s: String) -> Date { ISO8601.dateTime.date(from: s) ?? Date() } // use a fallback if parsing fails
+func od(_ s: String) -> Date? { ISO8601.dateTime.date(from: s) }         // optional date
+
+let fixed: [TaskItem] = [
+    TaskItem(
+        id: Int(Date().timeIntervalSince1970) + 101,
+        text: "Plan team lunch for next week",
+        notes: "Need to decide on a location and send out a poll.",
+        date: "2025-10-03",
+        status: .notStarted,
+        recurrence: nil,
+        createdAt: Date(),
+        startedAt: nil,
+        completedAt: nil,
+        completedOverrides: nil
+    ),
+    TaskItem(
+        id: Int(Date().timeIntervalSince1970) + 102,
+        text: "Prepare slides for Monday's presentation",
+        notes: "Focus on Q3 performance metrics.",
+        date: "2025-10-02",
+        status: .started,
+        recurrence: nil,
+        createdAt: d("2025-09-30T10:00:00Z"),
+        startedAt: od("2025-10-01T14:00:00Z"),
+        completedAt: nil,
+        completedOverrides: nil
+    ),
+    TaskItem(
+        id: Int(Date().timeIntervalSince1970) + 103,
+        text: "Submit weekly progress report",
+        notes: "Report was submitted yesterday morning.",
+        date: "2025-10-01",
+        status: .completed,
+        recurrence: nil,
+        createdAt: d("2025-09-29T09:00:00Z"),
+        startedAt: od("2025-10-01T09:00:00Z"),
+        completedAt: od("2025-10-01T11:30:00Z"),
+        completedOverrides: [
+            "2025-10-01": TaskOverride(
+                status: .completed,
+                startedAt: od("2025-10-01T09:00:00Z"),
+                completedAt: od("2025-10-01T11:30:00Z"),
+                rating: .liked
+            )
         ]
-        items.append(contentsOf: fixed)
+    ),
+    TaskItem(
+        id: Int(Date().timeIntervalSince1970) + 104,
+        text: "Review new design mockups",
+        notes: "Check for mobile responsiveness.",
+        date: "2025-10-02",
+        status: .notStarted,
+        recurrence: nil,
+        createdAt: Date(),
+        startedAt: nil,
+        completedAt: nil,
+        completedOverrides: nil
+    ),
+    TaskItem(
+        id: Int(Date().timeIntervalSince1970) + 105,
+        text: "Debug issue #5821 on the staging server",
+        notes: "The login page is throwing a 500 error.",
+        date: "2025-10-02",
+        status: .started,
+        recurrence: nil,
+        createdAt: d("2025-10-02T08:00:00Z"),
+        startedAt: od("2025-10-02T10:15:00Z"),
+        completedAt: nil,
+        completedOverrides: nil
+    ),
+    TaskItem(
+        id: Int(Date().timeIntervalSince1970) + 106,
+        text: "Daily Standup Meeting",
+        notes: "",
+        date: "2025-09-01",
+        status: .notStarted,
+        recurrence: .daily,
+        createdAt: d("2025-08-01T09:00:00Z"),
+        startedAt: nil,
+        completedAt: nil,
+        completedOverrides: [:]
+    )
+]
+items.append(contentsOf: fixed)
+
 
         // More random tasks (trimmed vs your full JS for brevity)
         let sampleTexts = [
