@@ -28,16 +28,13 @@ struct CompatEmptyState: View {
 struct ContentView: View {
     @StateObject private var state = AppState()
 
-    // Modals / sheets
+    // Sheets / modals
     @State private var showingDay: CalendarDay? = nil
     @State private var isModalBulkSelect = false
     @State private var selectedModalIds = Set<Int>()
     @State private var showingMenu = false
     @State private var isDarkMode = false
     @State private var showingSearch = false
-
-    // Calendar scroll
-    @State private var calendarScrollID = UUID()
 
     // Stats period controls
     enum Period: String, CaseIterable { case weekly, monthly, quarterly, semester, yearly, custom }
@@ -140,11 +137,13 @@ struct ContentView: View {
                 } else if state.isArchiveViewActive {
                     ArchivesView(state: state)
                 } else {
-                    CalendarPanel(state: state)
+                    CalendarPanel(state: state) { day in
+                        showingDay = day
+                    }
                 }
             }
             if !(state.isArchiveViewActive || state.isStatsViewActive) {
-                InboxPanel(state: state) // moved to its own lightweight view to fix type-check timeout
+                InboxPanel(state: state) // extracted to keep type-checking fast
             }
         }
     }
@@ -153,6 +152,7 @@ struct ContentView: View {
 // MARK: - Calendar panel (extracted)
 private struct CalendarPanel: View {
     @ObservedObject var state: AppState
+    var openDay: (CalendarDay) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -194,8 +194,12 @@ private struct CalendarPanel: View {
 
                 Divider().frame(height: 22)
 
-                Button("Today") { /* jump handled in onAppear */ }
-                    .buttonStyle(.borderedProminent)
+                Button("Today") {
+                    withAnimation {
+                        state.calendarStartDate = Calendar.current.date(byAdding: .day, value: -3, to: Date()) ?? Date()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
             }
 
             let days = state.calendarDays()
@@ -213,22 +217,10 @@ private struct CalendarPanel: View {
                                     day: day,
                                     tasks: list,
                                     bg: Color(UIColor.systemGray6)
-                                ) { /* on tap */ }
-                                .onTapGesture { /* show modal */ NotificationCenter.default.post(name: .showDay, object: day) }
-                                .onDrop(of: [.plainText], isTargeted: nil) { providers in
-                                    providers.first?.loadItem(forTypeIdentifier: "public.plain-text", options: nil, completionHandler: { data, _ in
-                                        guard
-                                            let d = data as? Data,
-                                            let idStr = String(data: d, encoding: .utf8),
-                                            let id = Int(idStr),
-                                            let t = state.tasks.first(where: { $0.id == id })
-                                        else { return }
-                                        DispatchQueue.main.async {
-                                            state.reschedule(t, to: day.dateString)
-                                        }
-                                    })
-                                    return true
-                                }
+                                ) { openDay(day) }
+                                .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
+                                    handleDropToDay(day: day, providers: providers)
+                                })
                                 .id(dayCardID(day.dateString))
                             }
                         }
@@ -237,11 +229,6 @@ private struct CalendarPanel: View {
                             let today = ISO8601.dateOnly.string(from: Date())
                             withAnimation { proxy.scrollTo(dayCardID(today), anchor: .leading) }
                         }
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .showDay)) { note in
-                    if let day = note.object as? CalendarDay {
-                        NotificationCenter.default.post(name: .openDayModal, object: day)
                     }
                 }
             } else {
@@ -258,8 +245,7 @@ private struct CalendarPanel: View {
                                         day: day,
                                         tasks: list,
                                         bg: Color(UIColor.systemGray6)
-                                    ) { }
-                                    .onTapGesture { NotificationCenter.default.post(name: .openDayModal, object: day) }
+                                    ) { openDay(day) }
                                     .id(dayListID(day.dateString))
                                 }
                             }
@@ -279,39 +265,31 @@ private struct CalendarPanel: View {
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .sheet(item: Binding(
-            get: { nil as CalendarDay? }, // opened via Notification
-            set: { _ in }
-        )) { _ in EmptyView() }
-        .onReceive(NotificationCenter.default.publisher(for: .openDayModal)) { note in
-            if let day = note.object as? CalendarDay {
-                CalendarPanelPresenter.shared.present(day: day, state: state)
+    }
+
+    private func handleDropToDay(day: CalendarDay, providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
+            guard
+                let d = data as? Data,
+                let idStr = String(data: d, encoding: .utf8),
+                let id = Int(idStr)
+            else { return }
+            DispatchQueue.main.async {
+                if let t = state.tasks.first(where: { $0.id == id }) {
+                    state.reschedule(t, to: day.dateString)
+                }
             }
         }
+        return true
     }
 }
 
-// Helper to bridge CalendarPanel to the Day modal without capturing large view trees
-private class CalendarPanelPresenter: ObservableObject {
-    static let shared = CalendarPanelPresenter()
-    fileprivate var host: UIHostingController<DayModalView>?
-    func present(day: CalendarDay, state: AppState) {
-        // Presentation handled by ContentView via top-level sheet.
-        NotificationCenter.default.post(name: .externalPresentDay, object: day)
-    }
-}
-
-extension Notification.Name {
-    static let showDay = Notification.Name("showDay")
-    static let openDayModal = Notification.Name("openDayModal")
-    static let externalPresentDay = Notification.Name("externalPresentDay")
-}
-
-// MARK: - Inbox panel (fully extracted, owns its local edit states)
+// MARK: - Inbox panel (extracted, light to type-check)
 private struct InboxPanel: View {
     @ObservedObject var state: AppState
 
-    // Local states (kept here to avoid huge ContentView expression)
+    // Local states
     @State private var newTaskText = ""
     @State private var editingTaskId: Int? = nil
     @State private var editText = ""
@@ -319,7 +297,6 @@ private struct InboxPanel: View {
     @State private var editDate: String = ""
     @State private var editStatus: TaskStatus = .notStarted
     @State private var editRecurrence: Recurrence = .never
-    @State private var inboxHoverTarget: Int? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -329,9 +306,10 @@ private struct InboxPanel: View {
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .onDrop(of: [.plainText]) { providers in
-            // Drop onto empty space to move back to inbox
-            providers.first?.loadItem(forTypeIdentifier: "public.plain-text", options: nil, completionHandler: { data, _ in
+        .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
+            // Dropping into empty space moves task to inbox
+            guard let provider = providers.first else { return false }
+            provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
                 guard
                     let d = data as? Data,
                     let idStr = String(data: d, encoding: .utf8),
@@ -339,12 +317,11 @@ private struct InboxPanel: View {
                     let t = state.tasks.first(where: { $0.id == id })
                 else { return }
                 DispatchQueue.main.async { state.moveToInbox(t) }
-            })
+            }
             return true
-        }
+        })
     }
 
-    // MARK: Pieces (small to keep type-check fast)
     private var header: some View {
         HStack {
             Text("Task Inbox").font(.title3).bold()
@@ -379,16 +356,9 @@ private struct InboxPanel: View {
                     ForEach(state.unassignedTasks) { t in
                         inboxRow(t)
                             .onDrag { NSItemProvider(object: NSString(string: "\(t.id)")) }
-                            .onDrop(of: [.plainText]) { providers in
+                            .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
                                 handleInboxDrop(on: t, providers: providers)
-                            }
-                            .overlay(alignment: .top) {
-                                if inboxHoverTarget == t.id {
-                                    Rectangle().fill(Color.accentColor)
-                                        .frame(height: 2)
-                                        .transition(.opacity)
-                                }
-                            }
+                            })
                     }
                 }
                 .listStyle(.inset)
@@ -485,12 +455,7 @@ private struct InboxPanel: View {
                 guard state.tasks[fromIndex].date == nil, state.tasks[toIndex].date == nil else { return }
                 let item = state.tasks.remove(at: fromIndex)
                 state.tasks.insert(item, at: toIndex)
-                inboxHoverTarget = nil
             }
-        }
-        inboxHoverTarget = target.id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            withAnimation { inboxHoverTarget = nil }
         }
         return true
     }
@@ -813,12 +778,12 @@ private struct StatsView: View {
     private func periodRange() -> ClosedRange<Date> {
         let cal = Calendar.current; let now = Date()
         switch period {
-        case .weekly:   return (cal.date(byAdding: .day, value: -7, to: now) ?? now)...now
-        case .monthly:  return (cal.date(byAdding: .month, value: -1, to: now) ?? now)...now
-        case .quarterly:return (cal.date(byAdding: .month, value: -3, to: now) ?? now)...now
-        case .semester: return (cal.date(byAdding: .month, value: -6, to: now) ?? now)...now
-        case .yearly:   return (cal.date(byAdding: .year, value: -1, to: now) ?? now)...now
-        case .custom:   return min(customStart, customEnd)...max(customStart, customEnd)
+        case .weekly:    return (cal.date(byAdding: .day, value: -7, to: now) ?? now)...now
+        case .monthly:   return (cal.date(byAdding: .month, value: -1, to: now) ?? now)...now
+        case .quarterly: return (cal.date(byAdding: .month, value: -3, to: now) ?? now)...now
+        case .semester:  return (cal.date(byAdding: .month, value: -6, to: now) ?? now)...now
+        case .yearly:    return (cal.date(byAdding: .year, value: -1, to: now) ?? now)...now
+        case .custom:    return min(customStart, customEnd)...max(customStart, customEnd)
         }
     }
 
@@ -970,8 +935,7 @@ private struct KPIBars: View {
                 Spacer()
                 Text("\(value)").font(.caption).foregroundStyle(.secondary)
             }
-            ProgressView(value: total > 0 ? Double(value) / Double(total) : 0)
-                .tint(tint)
+            ProgressView(value: total > 0 ? Double(value) / Double(total) : 0).tint(tint)
         }
         .padding(.vertical, 2)
     }
