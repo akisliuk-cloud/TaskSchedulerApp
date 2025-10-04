@@ -1,7 +1,7 @@
 name: TaskSchedulerApp
 options:
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "17.0"
 targets:
   TaskSchedulerApp:
     type: application
