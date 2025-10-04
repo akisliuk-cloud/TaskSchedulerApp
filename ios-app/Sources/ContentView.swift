@@ -1,8 +1,13 @@
 // ios-app/Sources/ContentView.swift
 import SwiftUI
 import Foundation
-import Charts // iOS 16+. If building for iOS 15, see fallback at bottom.
+import Charts // iOS 16+. If targeting 15, the chart area shows a fallback message.
 
+// MARK: - Scroll helpers (ids)
+private func dayCardID(_ dateStr: String) -> String { "card-\(dateStr)" }
+private func dayListID(_ dateStr: String) -> String { "list-\(dateStr)" }
+
+// MARK: - iOS16-friendly empty state
 struct CompatEmptyState: View {
     let title: String
     let systemImage: String
@@ -26,10 +31,11 @@ struct CompatEmptyState: View {
     }
 }
 
+// MARK: - Root view
 struct ContentView: View {
     @StateObject private var state = AppState()
 
-    // Modal
+    // Calendar modal
     @State private var showingDay: CalendarDay? = nil
     @State private var isModalBulkSelect = false
     @State private var selectedModalIds = Set<Int>() // instance ids
@@ -42,6 +48,9 @@ struct ContentView: View {
     @State private var editDate: String = ""
     @State private var editStatus: TaskStatus = .notStarted
     @State private var editRecurrence: Recurrence = .never
+
+    // Calendar scroll control
+    @State private var triggerScrollToToday = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -60,24 +69,59 @@ struct ContentView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Task Scheduler")
-                    .font(.largeTitle).bold()
-                Text("Drag tasks to schedule. Tap a day for details.")
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Task Scheduler")
+                        .font(.largeTitle).bold()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text("Drag tasks to schedule. Tap a day for details.")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                Spacer(minLength: 12)
+                TextField("Search tasks…", text: $state.searchQuery)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 220)
+                Button {
+                    state.isArchiveViewActive = true
+                    state.isStatsViewActive = false
+                } label: {
+                    Label("Archives", systemImage: "archivebox")
+                }
+                .buttonStyle(.bordered)
             }
-            Spacer()
-            TextField("Search tasks…", text: $state.searchQuery)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 220)
-            Button {
-                state.isArchiveViewActive = true
-                state.isStatsViewActive = false
-            } label: {
-                Label("Archives", systemImage: "archivebox")
+
+            // quick view toggles
+            HStack(spacing: 8) {
+                Button {
+                    state.isStatsViewActive = false
+                    state.isArchiveViewActive = false
+                } label: {
+                    Label("Calendar", systemImage: "calendar")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    state.isStatsViewActive = true
+                    state.isArchiveViewActive = false
+                } label: {
+                    Label("Stats", systemImage: "chart.bar")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    state.isArchiveViewActive = true
+                    state.isStatsViewActive = false
+                } label: {
+                    Label("Archives", systemImage: "archivebox")
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
             }
-            .buttonStyle(.bordered)
         }
     }
 
@@ -103,8 +147,10 @@ struct ContentView: View {
     // MARK: Calendar
 
     private var calendarPanel: some View {
-        VStack(spacing: 8) {
-            HStack {
+        VStack(spacing: 10) {
+
+            // Toolbar
+            HStack(spacing: 10) {
                 HStack(spacing: 6) {
                     Button {
                         withAnimation { state.calendarViewMode = .card }
@@ -124,9 +170,12 @@ struct ContentView: View {
                 Divider().frame(height: 22)
 
                 Button("Today") {
+                    // keep the window near “today”
                     withAnimation {
                         state.calendarStartDate = Calendar.current.date(byAdding: .day, value: -3, to: Date()) ?? Date()
                     }
+                    // trigger a scroll in the list/card below
+                    triggerScrollToToday.toggle()
                 }
                 .buttonStyle(.borderedProminent)
 
@@ -147,54 +196,69 @@ struct ContentView: View {
                         set: { state.calendarFilters[.completed] = $0 }
                     ), tint: .green)
                 }
-
-                Divider().frame(height: 22)
-
-                Button {
-                    state.isStatsViewActive = true
-                    state.isArchiveViewActive = false
-                } label: {
-                    Label("Stats", systemImage: "chart.bar")
-                }
-                .buttonStyle(.bordered)
             }
 
+            // Data
             let days = state.calendarDays()
             let expanded = state.visibleCalendarTasks(for: days)
             let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
+            let todayKey = ISO8601.dateOnly.string(from: Date())
 
+            // Cards/List with ScrollViewReader so "Today" jumps
             if state.calendarViewMode == .card {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(days) { day in
-                            let list = (tasksByDay[day.dateString] ?? [])
-                                .filter { state.calendarFilters[$0.status] ?? true }
-                            DayCard(day: day, tasks: list) {
-                                showingDay = day
-                            }
-                        }
-                    }.padding(.vertical, 2)
-                }
-            } else {
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(days) { day in
-                            let list = (tasksByDay[day.dateString] ?? [])
-                                .filter { state.calendarFilters[$0.status] ?? true }
-                            if state.searchQuery.isEmpty && list.isEmpty { EmptyView() }
-                            else {
-                                DayRow(day: day, tasks: list) {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(days) { day in
+                                let list = (tasksByDay[day.dateString] ?? [])
+                                    .filter { state.calendarFilters[$0.status] ?? true }
+                                DayCard(day: day, tasks: list) {
                                     showingDay = day
                                 }
+                                .id(dayCardID(day.dateString))
                             }
                         }
-                        if expanded.filter({ state.calendarFilters[$0.status] ?? true }).isEmpty {
-                            ContentUnavailableView("No scheduled tasks in this period match your filters", systemImage: "calendar")
-                                .padding(.top, 16)
+                        .padding(.vertical, 2)
+                    }
+                    .onChange(of: triggerScrollToToday) { _ in
+                        withAnimation {
+                            proxy.scrollTo(dayCardID(todayKey), anchor: .leading)
                         }
                     }
                 }
-                .frame(height: 240)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(days) { day in
+                                let list = (tasksByDay[day.dateString] ?? [])
+                                    .filter { state.calendarFilters[$0.status] ?? true }
+
+                                if state.searchQuery.isEmpty && list.isEmpty {
+                                    EmptyView()
+                                } else {
+                                    DayRow(day: day, tasks: list) {
+                                        showingDay = day
+                                    }
+                                    .id(dayListID(day.dateString))
+                                }
+                            }
+
+                            if expanded.filter({ state.calendarFilters[$0.status] ?? true }).isEmpty {
+                                CompatEmptyState(title: "No scheduled tasks in this period match your filters",
+                                                 systemImage: "calendar")
+                                    .padding(.top, 16)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                    .frame(height: 260)
+                    .onChange(of: triggerScrollToToday) { _ in
+                        withAnimation {
+                            proxy.scrollTo(dayListID(todayKey), anchor: .top)
+                        }
+                    }
+                }
             }
         }
         .padding()
@@ -204,7 +268,7 @@ struct ContentView: View {
     // MARK: Inbox
 
     private var inboxPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Task Inbox").font(.title3).bold()
                 if !state.unassignedTasks.isEmpty {
@@ -214,6 +278,9 @@ struct ContentView: View {
                         .background(Capsule().fill(Color.secondary.opacity(0.2)))
                 }
                 Spacer()
+                Button(state.isBulkSelectActiveInbox ? "Cancel" : "Select") {
+                    state.toggleBulkSelectInbox()
+                }
             }
 
             HStack(spacing: 8) {
@@ -229,16 +296,35 @@ struct ContentView: View {
             }
 
             if state.unassignedTasks.isEmpty {
-                ContentUnavailableView("No unassigned tasks", systemImage: "tray")
+                CompatEmptyState(title: "No unassigned tasks", systemImage: "tray")
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
+                // Bulk actions bar
+                if state.isBulkSelectActiveInbox, !state.unassignedTasks.isEmpty {
+                    HStack {
+                        Button("Select All") {
+                            state.setAllInboxSelection(state.unassignedTasks.map { $0.id })
+                        }
+                        Spacer()
+                        Button {
+                            state.archiveSelectedInbox()
+                        } label: { Label("Archive", systemImage: "archivebox") }
+                        Button(role: .destructive) {
+                            state.deleteSelectedInbox()
+                        } label: { Label("Delete", systemImage: "trash") }
+                    }
+                    .font(.subheadline)
+                    .padding(.vertical, 2)
+                }
+
+                // List
                 List {
                     ForEach(state.unassignedTasks) { t in
                         inboxRow(t)
                     }
                 }
                 .listStyle(.inset)
-                .frame(minHeight: 140, maxHeight: 280)
+                .frame(minHeight: 160, maxHeight: 300)
             }
         }
         .padding()
@@ -248,8 +334,20 @@ struct ContentView: View {
     @ViewBuilder private func inboxRow(_ t: TaskItem) -> some View {
         let isEditing = editingTaskId == t.id
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "line.3.horizontal")
-                .foregroundStyle(.secondary)
+            if state.isBulkSelectActiveInbox {
+                Toggle("", isOn: Binding(
+                    get: { state.selectedInboxTaskIds.contains(t.id) },
+                    set: { newValue in
+                        if newValue { state.selectedInboxTaskIds.insert(t.id) }
+                        else { state.selectedInboxTaskIds.remove(t.id) }
+                    }
+                ))
+                .labelsHidden()
+            } else {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+            }
+
             if isEditing {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Task title", text: $editText)
@@ -279,10 +377,8 @@ struct ContentView: View {
                     HStack {
                         Button("Cancel") { editingTaskId = nil }
                         Spacer()
-                        Button("Save") {
-                            saveEdits(t)
-                        }
-                        .buttonStyle(.borderedProminent)
+                        Button("Save") { saveEdits(t) }
+                            .buttonStyle(.borderedProminent)
                     }
                 }
             } else {
@@ -290,12 +386,10 @@ struct ContentView: View {
                     HStack(spacing: 6) {
                         Text(t.text).font(.body)
                         if let notes = t.notes, !notes.isEmpty {
-                            Image(systemName: "note.text")
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "note.text").foregroundStyle(.secondary)
                         }
                         if t.isRecurring {
-                            Image(systemName: "repeat")
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "repeat").foregroundStyle(.secondary)
                         }
                     }
                     Text("Created: \(formatDateTime(t.createdAt))")
@@ -303,31 +397,34 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                HStack(spacing: 0) {
-                    Button { state.archiveTask(t) } label: {
-                        Image(systemName: "archivebox")
-                    }
-                    .buttonStyle(.borderless)
-                    .padding(6)
 
-                    Button { state.duplicate(t) } label: {
-                        Image(systemName: "plus.square.on.square")
-                    }
-                    .buttonStyle(.borderless)
-                    .padding(6)
+                if !state.isBulkSelectActiveInbox {
+                    HStack(spacing: 0) {
+                        Button { state.archiveTask(t) } label: {
+                            Image(systemName: "archivebox")
+                        }
+                        .buttonStyle(.borderless)
+                        .padding(6)
 
-                    Button { state.deleteToTrash(t) } label: {
-                        Image(systemName: "trash")
+                        Button { state.duplicate(t) } label: {
+                            Image(systemName: "plus.square.on.square")
+                        }
+                        .buttonStyle(.borderless)
+                        .padding(6)
+
+                        Button { state.deleteToTrash(t) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .tint(.red)
+                        .padding(6)
                     }
-                    .buttonStyle(.borderless)
-                    .tint(.red)
-                    .padding(6)
+                    .opacity(0.9)
                 }
-                .opacity(0.9)
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { beginEdit(t) }
+        .onTapGesture(count: 2) { if !state.isBulkSelectActiveInbox { beginEdit(t) } }
     }
 
     private func beginEdit(_ t: TaskItem) {
@@ -341,7 +438,6 @@ struct ContentView: View {
 
     private func saveEdits(_ t: TaskItem) {
         guard let idx = state.tasks.firstIndex(where: { $0.id == t.id }) else { return }
-        // auto-archive if completed + has a date + not recurring
         if editStatus == .completed, !(state.tasks[idx].isRecurring), !editDate.isEmpty {
             var done = state.tasks[idx]
             done.text = editText.trimmingCharacters(in: .whitespaces)
@@ -359,7 +455,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Subviews
+// MARK: - Subviews (Calendar elements)
 
 private struct DayCard: View {
     let day: CalendarDay
@@ -451,7 +547,7 @@ private struct DayRow: View {
     }
 }
 
-// MARK: - Day Modal
+// MARK: - Day Modal (keeps your bulk select)
 
 private struct DayModalView: View {
     let day: CalendarDay
@@ -473,7 +569,7 @@ private struct DayModalView: View {
             }
 
             if expanded.isEmpty {
-                ContentUnavailableView("No tasks for this day", systemImage: "calendar")
+                CompatEmptyState(title: "No tasks for this day", systemImage: "calendar")
             } else {
                 ScrollView {
                     VStack(spacing: 8) {
@@ -615,16 +711,21 @@ private struct DayModalView: View {
     }
 }
 
-// MARK: - Archives
+// MARK: - Archives (with Select mode)
 
 private struct ArchivesView: View {
     @ObservedObject var state: AppState
+    @State private var isBulk = false
+    @State private var selectedIds: Set<Int> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Task Archives").font(.title2).bold()
                 Spacer()
+                Button(isBulk ? "Cancel" : "Select") {
+                    isBulk.toggle(); selectedIds.removeAll()
+                }
                 Button("Back to Calendar") {
                     state.isArchiveViewActive = false
                 }
@@ -638,23 +739,42 @@ private struct ArchivesView: View {
             }
             .pickerStyle(.segmented)
 
-            HStack {
-                Spacer()
-                Button(role: .destructive) {
-                    state.emptyArchive(reason: state.activeArchiveTab)
-                } label: {
-                    Label("Empty \(label(state.activeArchiveTab))", systemImage: "trash")
+            // Bulk actions bar
+            if isBulk {
+                HStack {
+                    Button("Select All") {
+                        let list = state.archivedTasks.filter { $0.archiveReason == state.activeArchiveTab.rawValue }
+                        selectedIds = Set(list.map { $0.id })
+                    }
+                    Spacer()
+                    Button {
+                        // restore selected
+                        let list = state.archivedTasks.filter { selectedIds.contains($0.id) }
+                        for a in list { state.restoreTask(a) }
+                        selectedIds.removeAll(); isBulk = false
+                    } label: { Label("Restore", systemImage: "arrow.uturn.left") }
+                    Button(role: .destructive) {
+                        for id in selectedIds { state.deletePermanently(id) }
+                        selectedIds.removeAll(); isBulk = false
+                    } label: { Label("Delete", systemImage: "trash") }
                 }
+                .font(.subheadline)
             }
 
             let list = state.archivedTasks.filter { $0.archiveReason == state.activeArchiveTab.rawValue }
             if list.isEmpty {
-                ContentUnavailableView("This archive is empty", systemImage: "tray")
+                CompatEmptyState(title: "This archive is empty", systemImage: "tray")
                     .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 List {
                     ForEach(list) { t in
                         HStack {
+                            if isBulk {
+                                Toggle("", isOn: Binding(
+                                    get: { selectedIds.contains(t.id) },
+                                    set: { v in if v { selectedIds.insert(t.id) } else { selectedIds.remove(t.id) } }
+                                )).labelsHidden()
+                            }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(t.text).font(.body)
                                     .strikethrough(t.archiveReason == "completed")
@@ -662,19 +782,19 @@ private struct ArchivesView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            HStack(spacing: 8) {
-                                Button {
-                                    state.restoreTask(t)
-                                } label: {
-                                    Label("Restore", systemImage: "arrow.uturn.left")
+                            if !isBulk {
+                                HStack(spacing: 8) {
+                                    Button { state.restoreTask(t) } label: {
+                                        Label("Restore", systemImage: "arrow.uturn.left")
+                                    }
+                                    Button(role: .destructive) {
+                                        state.deletePermanently(t.id)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
                                 }
-                                Button(role: .destructive) {
-                                    state.deletePermanently(t.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
+                                .buttonStyle(.borderless)
                             }
-                            .buttonStyle(.borderless)
                         }
                     }
                 }
@@ -695,49 +815,79 @@ private struct ArchivesView: View {
     }
 }
 
-// MARK: - Stats
+// MARK: - Stats (Summary ↔︎ Chart)
 
 private struct StatsView: View {
     @ObservedObject var state: AppState
 
-    // Simple weekly/monthly/quarter/semester/year selectors omitted for brevity; we present a rolling 8-week chart
     var body: some View {
-        let windowWeeks = 8
-        let (series, totals) = computeWeeklySeries(lastWeeks: windowWeeks)
+        // time window: last 8 weeks for chart/summary
+        let cal = Calendar(identifier: .iso8601)
+        let now = Date()
+        let startOfWeek = cal.date(from: cal.dateComponents([.yearForWeekOfYear,.weekOfYear], from: now)) ?? now
+        let startRange = cal.date(byAdding: .day, value: -7*7, to: startOfWeek) ?? now // 8 weeks window
+        let range = startRange...now
+
+        let (period, buckets) = state.stats(for: range, granularity: "week")
 
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(spacing: 10) {
                 Text("Task Statistics").font(.title2).bold()
                 Spacer()
+                Picker("View", selection: $state.statsViewType) {
+                    Text("Summary").tag(StatsViewType.summary)
+                    Text("Bar Chart").tag(StatsViewType.barchart)
+                }
+                .pickerStyle(.segmented)
+
                 Button("Back to Calendar") {
                     state.isStatsViewActive = false
                 }
                 .buttonStyle(.borderedProminent)
             }
 
-            // KPIs
-            HStack {
-                statCard(title: "Completed", value: totals.completed, tint: .green)
-                statCard(title: "Open", value: totals.open, tint: .orange)
-                statCard(title: "Total", value: totals.total, tint: .primary)
-                statCard(title: "Completion Rate", value: totals.ratePercent, suffix: "%", tint: .green)
-            }
+            if state.statsViewType == .summary {
+                // KPI tiles
+                HStack {
+                    statCard(title: "Completed", value: period.completed, tint: .green)
+                    statCard(title: "Open", value: period.open, tint: .orange)
+                    statCard(title: "Total", value: period.total, tint: .primary)
+                    let rate = period.total > 0 ? Int(round(Double(period.completed) / Double(period.total) * 100.0)) : 0
+                    statCard(title: "Completion Rate", value: rate, suffix: "%", tint: .green)
+                }
 
-            // Bar chart (uses Charts if available)
-            GroupBox("Last \(windowWeeks) weeks") {
-                if #available(iOS 16.0, *) {
-                    Chart {
-                        ForEach(series, id: \.label) { w in
-                            BarMark(x: .value("Week", w.label), y: .value("Completed", w.completed))
-                            BarMark(x: .value("Week", w.label), y: .value("Open", w.open))
-                                .foregroundStyle(.orange)
-                        }
+                // Ratings breakdown
+                GroupBox("Ratings (in window)") {
+                    HStack {
+                        statCard(title: "👍 Done", value: period.likedCompleted, tint: .green)
+                        statCard(title: "👎 Done", value: period.dislikedCompleted, tint: .red)
+                        statCard(title: "👍 Open", value: period.likedOpen, tint: .blue)
+                        statCard(title: "👎 Open", value: period.dislikedOpen, tint: .orange)
                     }
-                    .frame(height: 220)
-                } else {
-                    // Fallback minimal
-                    Text("Charts requires iOS 16+. Upgrade target to see chart.")
-                        .frame(height: 60)
+                }
+
+            } else {
+                // Bar chart view
+                GroupBox("Weekly breakdown (last 8 weeks)") {
+                    if #available(iOS 16.0, *) {
+                        // Convert buckets (key = week start yyyy-MM-dd) to sorted series
+                        let keys = buckets.keys.sorted()
+                        let series = keys.map { k -> (label: String, c: Int, o: Int) in
+                            let weekNum = Calendar(identifier: .iso8601).component(.weekOfYear, from: k.asISODateOnlyUTC ?? now)
+                            let b = buckets[k] ?? (0,0)
+                            return ("CW \(weekNum)", b.completed, b.open)
+                        }
+                        Chart {
+                            ForEach(series, id: \.label) { w in
+                                BarMark(x: .value("Week", w.label), y: .value("Completed", w.c))
+                                BarMark(x: .value("Week", w.label), y: .value("Open", w.o))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .frame(height: 240)
+                    } else {
+                        Text("Charts require iOS 16+.").frame(height: 60)
+                    }
                 }
             }
         }
@@ -754,64 +904,9 @@ private struct StatsView: View {
         .padding()
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
     }
-
-    private func computeWeeklySeries(lastWeeks: Int) -> (series: [(label: String, completed: Int, open: Int)], totals: (completed: Int, open: Int, total: Int, ratePercent: Int)) {
-        // Combine tasks + archives
-        var all: [(date: String, status: String)] = []
-        for t in state.tasks {
-            if let d = t.date {
-                all.append((d, t.status.rawValue))
-            }
-        }
-        for a in state.archivedTasks {
-            if let d = a.date {
-                all.append((d, a.archiveReason)) // completed / started / not_started / deleted
-            }
-        }
-
-        // last N weeks labels (Mon-based)
-        let cal = Calendar(identifier: .iso8601)
-        let now = Date()
-        let monday = cal.date(from: cal.dateComponents([.yearForWeekOfYear,.weekOfYear], from: now))!
-        var labels: [String] = []
-        for i in stride(from: lastWeeks-1, through: 0, by: -1) {
-            let start = cal.date(byAdding: .day, value: -7*i, to: monday)!
-            let ds = ISO8601.dateOnly.string(from: start)
-            labels.append(ds)
-        }
-
-        var buckets: [String: (c: Int, o: Int)] = [:]
-        for key in labels { buckets[key] = (0, 0) }
-
-        for entry in all {
-            guard let d = entry.date.asISODateOnlyUTC else { continue }
-            let startOfWeek = cal.date(from: cal.dateComponents([.yearForWeekOfYear,.weekOfYear], from: d))!
-            let key = ISO8601.dateOnly.string(from: startOfWeek)
-            if buckets[key] == nil { continue }
-            if entry.status == "completed" {
-                buckets[key]!.c += 1
-            } else if entry.status == "deleted" {
-                // ignore in open/complete
-            } else {
-                buckets[key]!.o += 1
-            }
-        }
-
-        let series = labels.map { key in
-            let b = buckets[key] ?? (0, 0)
-            let weekNum = Calendar(identifier: .iso8601).component(.weekOfYear, from: key.asISODateOnlyUTC ?? Date())
-            return (label: "CW \(weekNum)", completed: b.c, open: b.o)
-        }
-
-        let c = series.reduce(0) { $0 + $1.completed }
-        let o = series.reduce(0) { $0 + $1.open }
-        let total = c + o
-        let rate = total > 0 ? Int(round(Double(c) / Double(total) * 100.0)) : 0
-        return (series, (c, o, total, rate))
-    }
 }
 
-// MARK: - Small helpers / UI bits
+// MARK: - Small UI helpers
 
 private struct TogglePill: View {
     let label: String
