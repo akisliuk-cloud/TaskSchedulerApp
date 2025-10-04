@@ -307,6 +307,86 @@ final class AppState: ObservableObject {
     func emptyArchive(reason: ArchiveTab) {
         archivedTasks.removeAll { $0.archiveReason == reason.rawValue }
     }
+    
+    // MARK: - Stats helpers
+    
+    struct PeriodStats {
+        var total = 0
+        var completed = 0
+        var open = 0
+        var likedCompleted = 0
+        var dislikedCompleted = 0
+        var likedOpen = 0
+        var dislikedOpen = 0
+        var periodLabel = ""
+    }
+    
+    /// Build statistics for a given date range and chart granularity ("day" | "week" | "month")
+    func stats(for range: ClosedRange<Date>, granularity: String) -> (PeriodStats, [String: (completed: Int, open: Int)]) {
+        // Combine live and archived into one list of TaskItem for counting
+        let all = tasks + archivedTasks.map { a in
+            TaskItem(id: a.id, text: a.text, notes: a.notes, date: a.date,
+                     status: a.status, recurrence: nil, createdAt: a.createdAt,
+                     startedAt: a.startedAt, completedAt: a.completedAt, completedOverrides: nil)
+        }
+    
+        func dayKey(_ d: Date) -> String { ISO8601.dateOnly.string(from: d) }
+    
+        // Keep only items whose (scheduled) date falls in range
+        let relevant = all.compactMap { t -> (TaskItem, Date)? in
+            guard let ds = t.date, let d = ds.asISODateOnlyUTC else { return nil }
+            guard range.contains(d) else { return nil }
+            return (t, d)
+        }
+    
+        var buckets: [String: (completed: Int, open: Int)] = [:]
+        var s = PeriodStats()
+    
+        for (t, d) in relevant {
+            let key: String
+            switch granularity {
+            case "day":
+                key = dayKey(d)
+            case "week":
+                // Monday of that ISO week
+                let monday = Calendar.current.date(from: Calendar.current.dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)) ?? d
+                key = dayKey(monday)
+            case "month":
+                let comps = Calendar.current.dateComponents([.year, .month], from: d)
+                key = String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
+            default:
+                key = dayKey(d)
+            }
+    
+            var cur = buckets[key] ?? (0, 0)
+            if t.status == .completed {
+                cur.completed += 1
+            } else {
+                cur.open += 1
+            }
+            buckets[key] = cur
+    
+            // Rating stats: look at override on that date if present
+            let rating = t.completedOverrides?[t.date ?? ""]?.rating
+            if t.status == .completed {
+                if rating == .liked { s.likedCompleted += 1 }
+                if rating == .disliked { s.dislikedCompleted += 1 }
+            } else {
+                if rating == .liked { s.likedOpen += 1 }
+                if rating == .disliked { s.dislikedOpen += 1 }
+            }
+        }
+    
+        // Totals
+        let totals = relevant.reduce(into: (c: 0, o: 0)) { acc, pair in
+            if pair.0.status == .completed { acc.c += 1 } else { acc.o += 1 }
+        }
+        s.completed = totals.c
+        s.open = totals.o
+        s.total = totals.c + totals.o
+    
+        return (s, buckets)
+    }
 
 
     func toggleBulkSelectInbox() {
