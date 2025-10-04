@@ -48,7 +48,8 @@ final class AppState: ObservableObject {
             var cur = calendarStartDate
             for _ in 0..<90 {
                 let ds = ISO8601.dateOnly.string(from: cur)
-                let c = Calendar.current.dateComponents(in: TimeZone(secondsFromGMT: 0)!, from: cur)
+                let tz = TimeZone(secondsFromGMT: 0) ?? .current
+                let c = Calendar.current.dateComponents(in: tz, from: cur)
                 let dayName = cur.formatted(.dateTime.weekday(.abbreviated))
                 days.append(.init(dateString: ds, dayName: dayName, dayOfMonth: c.day ?? 1))
                 cur = Calendar.current.date(byAdding: .day, value: 1, to: cur) ?? cur
@@ -408,8 +409,9 @@ items.append(contentsOf: fixed)
             "Refactor the old payment module","Create A/B test","Analyze user feedback","Schedule annual team retreat"
         ]
 
-        let start = ISO8601.dateTime.date(from: "2025-07-01T00:00:00Z")!
-        let end   = ISO8601.dateTime.date(from: "2025-11-01T00:00:00Z")!
+        // Safe parse (never force-unwrap)
+        let start = ISO8601.dateTime.date(from: "2025-07-01T00:00:00Z") ?? Date(timeIntervalSince1970: 0)
+        let end   = ISO8601.dateTime.date(from: "2025-11-01T00:00:00Z") ?? Date()
 
         func randDate(_ a: Date, _ b: Date) -> Date {
             let t = TimeInterval.random(in: a.timeIntervalSince1970...b.timeIntervalSince1970)
@@ -435,7 +437,7 @@ items.append(contentsOf: fixed)
             items.append(
                 TaskItem(
                     id: Int(Date().timeIntervalSince1970) + i,
-                    text: sampleTexts.randomElement()!,
+                    text: sampleTexts.randomElement() ?? "Task",
                     notes: Bool.random() ? "Check requirements doc / may slip." : nil,
                     date: dateStr,
                     status: status,
