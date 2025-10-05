@@ -1,140 +1,6 @@
 import Foundation
 import SwiftUI
 
-// MARK: - Core Data Models (Added here to resolve build errors)
-
-enum TaskStatus: String, Codable, CaseIterable, Identifiable {
-    case notStarted = "not_started"
-    case started
-    case completed
-    
-    var id: String { self.rawValue }
-    
-    var displayName: String {
-        switch self {
-        case .notStarted: "To Do"
-        case .started: "Started"
-        case .completed: "Completed"
-        }
-    }
-}
-
-enum TaskRating: String, Codable {
-    case liked, disliked
-}
-
-enum Recurrence: String, Codable, CaseIterable, Identifiable {
-    case never, daily, weekly, monthly
-    var id: String { self.rawValue }
-}
-
-enum ArchiveTab: String, CaseIterable, Identifiable {
-    case not_started, started, completed, deleted
-    var id: String { rawValue }
-}
-
-struct TaskOverride: Codable, Hashable {
-    var status: TaskStatus?
-    var startedAt: Date?
-    var completedAt: Date?
-    var rating: TaskRating?
-}
-
-struct TaskItem: Identifiable, Codable, Equatable {
-    var id: Int
-    var text: String
-    var notes: String?
-    var date: String? // YYYY-MM-DD
-    var status: TaskStatus
-    var recurrence: Recurrence?
-    var createdAt: Date
-    var createdBy: String = "Adrian Kisliuk" // Default value
-    var assignedTo: String?
-    var startedAt: Date?
-    var completedAt: Date?
-    var completedOverrides: [String: TaskOverride]?
-    var parentId: Int? // Used for instances
-    var isInstance: Bool = false
-    var rating: TaskRating?
-
-    var isRecurring: Bool { recurrence != nil && recurrence != .never }
-
-    // Initializer from ArchivedTask
-    init(from archived: ArchivedTask) {
-        self.id = archived.id
-        self.text = archived.text
-        self.notes = archived.notes
-        self.date = archived.date
-        self.status = archived.status
-        self.recurrence = nil // Restored tasks lose recurrence
-        self.createdAt = archived.createdAt
-        self.createdBy = "Adrian Kisliuk"
-        self.assignedTo = nil // and assignment
-        self.startedAt = archived.startedAt
-        self.completedAt = archived.completedAt
-        self.completedOverrides = nil
-        self.rating = archived.rating
-    }
-    
-    // Default initializer
-    init(id: Int, text: String, notes: String?, date: String?, status: TaskStatus, recurrence: Recurrence?, createdAt: Date, createdBy: String = "Adrian Kisliuk", assignedTo: String? = nil, startedAt: Date? = nil, completedAt: Date? = nil, completedOverrides: [String : TaskOverride]?, parentId: Int? = nil, isInstance: Bool = false, rating: TaskRating? = nil) {
-        self.id = id
-        self.text = text
-        self.notes = notes
-        self.date = date
-        self.status = status
-        self.recurrence = recurrence
-        self.createdAt = createdAt
-        self.createdBy = createdBy
-        self.assignedTo = assignedTo
-        self.startedAt = startedAt
-        self.completedAt = completedAt
-        self.completedOverrides = completedOverrides
-        self.parentId = parentId
-        self.isInstance = isInstance
-        self.rating = rating
-    }
-}
-
-struct ArchivedTask: Identifiable, Codable, Hashable {
-    var id: Int
-    var text: String
-    var notes: String?
-    var date: String?
-    var status: TaskStatus
-    var createdAt: Date
-    var startedAt: Date?
-    var completedAt: Date?
-    var archivedAt: Date
-    var archiveReason: String // "deleted", "not_started", "started", "completed"
-    var rating: TaskRating?
-    
-    // Custom initializer to create an ArchivedTask from a TaskItem
-    init(from task: TaskItem, reason: String, status: TaskStatus? = nil, startedAt: Date? = nil, completedAt: Date? = nil) {
-        self.id = task.id
-        self.text = task.text
-        self.notes = task.notes
-        self.date = task.date
-        self.status = status ?? task.status
-        self.createdAt = task.createdAt
-        self.startedAt = startedAt ?? task.startedAt
-        self.completedAt = completedAt ?? task.completedAt
-        self.archivedAt = Date()
-        self.archiveReason = reason
-        self.rating = task.rating
-    }
-    
-    // ** FIX FOR BUILD ERROR **
-    // Manual conformance to Equatable and Hashable
-    static func == (lhs: ArchivedTask, rhs: ArchivedTask) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
-}
-
 // MARK: - View / stats toggles
 enum StatsViewType: String, CaseIterable {
     case summary, barchart
@@ -165,6 +31,7 @@ final class AppState: ObservableObject {
                     activeTab = oldValue == .search ? .home : oldValue
                 }
             } else {
+                // Hide search bar when switching to any other tab
                 isSearchVisible = false
             }
         }
@@ -196,8 +63,10 @@ final class AppState: ObservableObject {
         undoState = (tasks, archivedTasks)
         snackbarMessage = message
         
+        // Cancel any pending dismissal
         snackbarWorkItem?.cancel()
         
+        // Create a new work item to dismiss the snackbar after 5 seconds
         let workItem = DispatchWorkItem { [weak self] in
             self?.snackbarMessage = nil
             self?.undoState = nil
@@ -208,9 +77,13 @@ final class AppState: ObservableObject {
 
     func performUndo() {
         if let (previousTasks, previousArchived) = undoState {
-            self.tasks = previousTasks
-            self.archivedTasks = previousArchived
+            // Use withAnimation to make the restoration visually smoother
+            withAnimation {
+                self.tasks = previousTasks
+                self.archivedTasks = previousArchived
+            }
         }
+        // Clear the snackbar immediately on undo
         snackbarMessage = nil
         undoState = nil
         snackbarWorkItem?.cancel()
@@ -590,7 +463,7 @@ final class AppState: ObservableObject {
 }
 
 
-// MARK: - Sample Data & Helpers (Also moved here)
+// MARK: - Sample Data & Helpers
 enum SampleData {
     static func generateTasks() -> [TaskItem] {
         var items: [TaskItem] = []
