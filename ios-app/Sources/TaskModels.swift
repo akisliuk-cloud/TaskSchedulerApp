@@ -1,107 +1,47 @@
+// ios-app/Sources/TaskModels.swift
 import Foundation
-
-// MARK: - Core Data Models
 
 enum TaskStatus: String, Codable, CaseIterable, Identifiable {
     case notStarted = "not_started"
-    case started
-    case completed
-    
-    var id: String { self.rawValue }
-    
-    var displayName: String {
-        switch self {
-        case .notStarted: "To Do"
-        case .started: "Started"
-        case .completed: "Completed"
-        }
-    }
-}
-
-enum TaskRating: String, Codable {
-    case liked, disliked
+    case started = "started"
+    case completed = "completed"
+    var id: String { rawValue }
 }
 
 enum Recurrence: String, Codable, CaseIterable, Identifiable {
     case never, daily, weekly, monthly
-    var id: String { self.rawValue }
+    var id: String { rawValue }
+    var isRepeating: Bool { self != .never }
 }
 
-enum ArchiveTab: String, CaseIterable, Identifiable {
-    case not_started, started, completed, deleted
+enum TaskRating: String, Codable, CaseIterable, Identifiable {
+    case liked, disliked
     var id: String { rawValue }
 }
 
 struct TaskOverride: Codable, Hashable {
-    var status: TaskStatus?
-    var startedAt: Date?
-    var completedAt: Date?
-    var rating: TaskRating?
+    var status: TaskStatus? = nil
+    var startedAt: Date? = nil
+    var completedAt: Date? = nil
+    var rating: TaskRating? = nil
 }
 
-struct TaskItem: Identifiable, Codable, Equatable, Hashable {
+struct TaskItem: Identifiable, Codable, Hashable {
     var id: Int
     var text: String
     var notes: String?
-    var date: String? // YYYY-MM-DD
+    /// yyyy-MM-dd in UTC (nil = inbox)
+    var date: String?
     var status: TaskStatus
-    var recurrence: Recurrence?
+    var recurrence: Recurrence? // nil = never
     var createdAt: Date
-    var createdBy: String = "Adrian Kisliuk" // Default value
-    var assignedTo: String?
     var startedAt: Date?
     var completedAt: Date?
+    /// Overrides for recurring instances keyed by yyyy-MM-dd
     var completedOverrides: [String: TaskOverride]?
-    var parentId: Int? // Used for instances
-    var isInstance: Bool = false
-    var rating: TaskRating?
 
+    // For UI convenience
     var isRecurring: Bool { recurrence != nil && recurrence != .never }
-
-    // Initializer from ArchivedTask
-    init(from archived: ArchivedTask) {
-        self.id = archived.id
-        self.text = archived.text
-        self.notes = archived.notes
-        self.date = archived.date
-        self.status = archived.status
-        self.recurrence = nil // Restored tasks lose recurrence
-        self.createdAt = archived.createdAt
-        self.createdBy = "Adrian Kisliuk"
-        self.assignedTo = nil // and assignment
-        self.startedAt = archived.startedAt
-        self.completedAt = archived.completedAt
-        self.completedOverrides = nil
-        self.rating = archived.rating
-    }
-    
-    // Default initializer
-    init(id: Int, text: String, notes: String?, date: String?, status: TaskStatus, recurrence: Recurrence?, createdAt: Date, createdBy: String = "Adrian Kisliuk", assignedTo: String? = nil, startedAt: Date? = nil, completedAt: Date? = nil, completedOverrides: [String : TaskOverride]?, parentId: Int? = nil, isInstance: Bool = false, rating: TaskRating? = nil) {
-        self.id = id
-        self.text = text
-        self.notes = notes
-        self.date = date
-        self.status = status
-        self.recurrence = recurrence
-        self.createdAt = createdAt
-        self.createdBy = createdBy
-        self.assignedTo = assignedTo
-        self.startedAt = startedAt
-        self.completedAt = completedAt
-        self.completedOverrides = completedOverrides
-        self.parentId = parentId
-        self.isInstance = isInstance
-        self.rating = rating
-    }
-    
-    // Conformance for Equatable and Hashable
-    static func == (lhs: TaskItem, rhs: TaskItem) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
 }
 
 struct ArchivedTask: Identifiable, Codable, Hashable {
@@ -114,45 +54,23 @@ struct ArchivedTask: Identifiable, Codable, Hashable {
     var startedAt: Date?
     var completedAt: Date?
     var archivedAt: Date
-    var archiveReason: String // "deleted", "not_started", "started", "completed"
+    /// "completed" | "deleted" | "not_started" | "started"
+    var archiveReason: String
     var rating: TaskRating?
-    
-    // Custom initializer to create an ArchivedTask from a TaskItem
-    init(from task: TaskItem, reason: String, status: TaskStatus? = nil, startedAt: Date? = nil, completedAt: Date? = nil) {
-        self.id = task.id
-        self.text = task.text
-        self.notes = task.notes
-        self.date = task.date
-        self.status = status ?? task.status
-        self.createdAt = task.createdAt
-        self.startedAt = startedAt ?? task.startedAt
-        self.completedAt = completedAt ?? task.completedAt
-        self.archivedAt = Date()
-        self.archiveReason = reason
-        self.rating = task.rating
-    }
-    
-    // Manual conformance to Equatable and Hashable
-    static func == (lhs: ArchivedTask, rhs: ArchivedTask) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
 }
 
-// MARK: - View-specific Models
-struct CalendarDay: Identifiable, Hashable {
-    var id = UUID()
-    var dateString: String
-    var dayName: String
-    var dayOfMonth: Int
+enum ArchiveTab: String, CaseIterable, Identifiable {
+    case not_started, started, completed, deleted
+    var id: String { rawValue }
 }
 
-enum CalendarViewMode { case card, list }
+enum CalendarViewMode: String, CaseIterable, Identifiable {
+    case card, list
+    var id: String { rawValue }
+}
 
 // MARK: - Date helpers
+
 enum ISO8601 {
     static let dateOnly: DateFormatter = {
         let f = DateFormatter()
@@ -175,4 +93,3 @@ extension String {
     /// Parse yyyy-MM-dd -> Date in UTC
     var asISODateOnlyUTC: Date? { ISO8601.dateOnly.date(from: self) }
 }
-
