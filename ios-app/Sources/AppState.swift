@@ -35,6 +35,30 @@ final class AppState: ObservableObject {
     // Stats view toggle
     @Published var statsViewType: StatsViewType = .summary // .summary or .barchart
 
+    // Undo/snackbar support
+    @Published var lastSnapshotTasks: [TaskItem] = []
+    @Published var lastSnapshotArchived: [ArchivedTask] = []
+    
+    // Lightweight per-task meta (assignments etc.)
+    struct TaskMeta: Codable, Hashable {
+        var createdBy: String = "Adrian Kisliuk"
+        var assignedTo: String = ""
+    }
+    @Published var taskMeta: [Int: TaskMeta] = [:]
+    
+    // Helper to snapshot state for undo
+    func snapshotForUndo() {
+        lastSnapshotTasks = tasks
+        lastSnapshotArchived = archivedTasks
+    }
+    
+    // Helper to perform undo
+    func undoToLastSnapshot() {
+        tasks = lastSnapshotTasks
+        archivedTasks = lastSnapshotArchived
+    }
+
+
     init() {
         self.tasks = SampleData.generateTasks()
     }
