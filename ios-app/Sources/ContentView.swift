@@ -2,14 +2,6 @@ import SwiftUI
 import Foundation
 import Charts
 
-// MARK: - View-specific Models
-struct CalendarDay: Identifiable, Hashable {
-    var id = UUID()
-    var dateString: String
-    var dayName: String
-    var dayOfMonth: Int
-}
-
 // MARK: - Main App View
 struct ContentView: View {
     @StateObject private var state = AppState()
@@ -726,29 +718,5 @@ enum Tab: String, CaseIterable, Identifiable {
         case .settings: return "gear"
         }
     }
-}
-
-// MARK: - Date helpers (Moved from TaskModels.swift)
-enum ISO8601 {
-    static let dateOnly: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .iso8601)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    static let dateTime: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        return f
-    }()
-}
-
-extension String {
-    /// Parse yyyy-MM-dd -> Date in UTC
-    var asISODateOnlyUTC: Date? { ISO8601.dateOnly.date(from: self) }
 }
 
