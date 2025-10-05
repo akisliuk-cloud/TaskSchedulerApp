@@ -5,8 +5,6 @@ import SwiftUI
 enum StatsViewType: String, CaseIterable {
     case summary, barchart
 }
-enum CalendarViewMode { case card, list }
-
 
 // MARK: - App State
 final class AppState: ObservableObject {
@@ -463,7 +461,7 @@ final class AppState: ObservableObject {
 }
 
 
-// MARK: - Sample Data & Helpers
+// MARK: - Sample Data
 enum SampleData {
     static func generateTasks() -> [TaskItem] {
         var items: [TaskItem] = []
@@ -499,26 +497,7 @@ enum SampleData {
     }
 }
 
-extension String {
-    var asISODateOnlyUTC: Date? {
-        ISO8601.dateOnly.date(from: self)
-    }
-}
-
-extension ISO8601DateFormatter {
-    static let dateOnly: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withFullDate]
-        return f
-    }()
-    
-    static let dateTime: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-}
-
+// MARK: - Helper Extensions
 extension Array {
     func partitioned(by predicate: (Element) -> Bool) -> ([Element], [Element]) {
         var matching: [Element] = []
