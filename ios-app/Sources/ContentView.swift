@@ -84,29 +84,14 @@ struct ContentView: View {
             }
         }
         .sheet(item: $showingDay) { day in
-            DayModalView(day: day, state: state) { kind, t in
-                // centralize snackbar triggers for day actions
+            DayModalView(day: day, state: state) { kind, _ in
+                // Centralize snackbar triggers for day actions
                 switch kind {
-                case .archive:
-                    showUndo("Task archived") {
-                        state.undoToLastSnapshot()
-                    }
-                case .delete:
-                    showUndo("Task deleted") {
-                        state.undoToLastSnapshot()
-                    }
-                case .duplicate:
-                    showUndo("Task duplicated") {
-                        state.undoToLastSnapshot()
-                    }
-                case .moveToInbox:
-                    showUndo("Moved to Inbox") {
-                        state.undoToLastSnapshot()
-                    }
-                case .reschedule:
-                    showUndo("Task rescheduled") {
-                        state.undoToLastSnapshot()
-                    }
+                case .archive:      showUndo("Task archived")     { state.undoToLastSnapshot() }
+                case .delete:       showUndo("Task deleted")      { state.undoToLastSnapshot() }
+                case .duplicate:    showUndo("Task duplicated")   { state.undoToLastSnapshot() }
+                case .moveToInbox:  showUndo("Moved to Inbox")    { state.undoToLastSnapshot() }
+                case .reschedule:   showUndo("Task rescheduled")  { state.undoToLastSnapshot() }
                 }
             }
             .presentationDetents([.medium, .large])
@@ -349,7 +334,10 @@ struct ContentView: View {
                                          state.archiveTask(t)
                                          showUndo("Task archived") { state.undoToLastSnapshot() }
                                      case .edit:
-                                         // Optional: present an edit sheet; for now noop
+                                         // Wire an edit sheet here if needed
+                                         break
+                                     case .moveToInbox:
+                                         // Inbox row won’t surface this option; ignore
                                          break
                                      }
                                  },
@@ -538,7 +526,7 @@ private struct DayRow: View {
 }
 
 // MARK: - Inbox Row
-private enum InboxRowAction { case delete, duplicate, archive, edit }
+private enum InboxRowAction { case delete, duplicate, archive, edit, moveToInbox }
 
 private struct InboxRow: View {
     let t: TaskItem
@@ -649,112 +637,117 @@ private struct DayModalView: View {
     var body: some View {
         let expanded = state.visibleCalendarTasks(for: [day])
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(day.dayName).font(.title2).bold()
-                    Text(dateLong(day.dateString)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(isSelecting ? "Cancel" : "Select") {
-                    withAnimation {
-                        isSelecting.toggle()
-                        selectedIds.removeAll()
-                    }
-                }
-            }
+            header(expanded: expanded)
 
             if expanded.isEmpty {
                 CompatEmptyState(title: "No tasks for this day", systemImage: "calendar")
             } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(expanded) { t in
-                            TaskLine(t: t,
-                                     dayString: day.dateString,
-                                     isSelecting: isSelecting,
-                                     isChecked: selectedIds.contains(t.id),
-                                     onToggleCheck: {
-                                         if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                                     },
-                                     onStatus: { s in
-                                         state.updateStatus(t, to: s, instanceDate: day.dateString)
-                                     },
-                                     onSetRecurrence: { r in
-                                         state.updateRecurrence(t, to: r)
-                                     },
-                                     onRate: {
-                                         let current = t.completedOverrides?[day.dateString]?.rating
-                                         let next: TaskRating? = {
-                                             switch current {
-                                             case nil: return .liked
-                                             case .liked: return .disliked
-                                             case .disliked: return nil
-                                             }
-                                         }()
-                                         state.rate(t, rating: next, instanceDate: day.dateString)
-                                     },
-                                     onMore: { action in
-                                         state.snapshotForUndo()
-                                         switch action {
-                                         case .archive:
-                                             state.archiveTask(t)
-                                             onAction(.archive, t)
-                                         case .duplicate:
-                                             state.duplicate(t)
-                                             onAction(.duplicate, t)
-                                         case .moveToInbox:
-                                             state.moveToInbox(t)
-                                             onAction(.moveToInbox, t)
-                                         case .delete:
-                                             state.deleteToTrash(t)
-                                             onAction(.delete, t)
-                                         case .edit:
-                                             break
-                                         }
-                                     }
-                            )
-                        }
-                    }
-                }
+                ScrollView { tasksList(expanded: expanded) }
             }
 
             if isSelecting, !selectedIds.isEmpty {
-                HStack {
-                    Text("\(selectedIds.count) selected").font(.subheadline).bold()
-                    Spacer()
-                    Button {
-                        state.snapshotForUndo()
-                        for t in expanded where selectedIds.contains(t.id) { state.moveToInbox(t) }
-                        selectedIds.removeAll()
-                        isSelecting = false
-                        onAction(.moveToInbox, expanded.first!)
-                    } label: {
-                        Label("Move to Inbox", systemImage: "tray")
-                    }
-                    Button {
-                        state.snapshotForUndo()
-                        for t in expanded where selectedIds.contains(t.id) { state.archiveTask(t) }
-                        selectedIds.removeAll()
-                        isSelecting = false
-                        onAction(.archive, expanded.first!)
-                    } label: {
-                        Label("Archive", systemImage: "archivebox")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button(role: .destructive) {
-                        state.snapshotForUndo()
-                        for t in expanded where selectedIds.contains(t.id) { state.deleteToTrash(t) }
-                        selectedIds.removeAll()
-                        isSelecting = false
-                        onAction(.delete, expanded.first!)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-                .padding(.top, 6)
+                bulkBar(expanded: expanded)
             }
         }
         .padding()
+    }
+
+    // Split big body to help type-checker
+    @ViewBuilder private func header(expanded: [TaskItem]) -> some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(day.dayName).font(.title2).bold()
+                Text(dateLong(day.dateString)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(isSelecting ? "Cancel" : "Select") {
+                withAnimation {
+                    isSelecting.toggle()
+                    selectedIds.removeAll()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func tasksList(expanded: [TaskItem]) -> some View {
+        VStack(spacing: 8) {
+            ForEach(expanded) { t in
+                TaskLine(
+                    t: t,
+                    dayString: day.dateString,
+                    isSelecting: isSelecting,
+                    isChecked: selectedIds.contains(t.id),
+                    onToggleCheck: {
+                        if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
+                    },
+                    onStatus: { s in
+                        state.updateStatus(t, to: s, instanceDate: day.dateString)
+                    },
+                    onSetRecurrence: { r in
+                        state.updateRecurrence(t, to: r)
+                    },
+                    onRate: {
+                        let current = t.completedOverrides?[day.dateString]?.rating
+                        let next: TaskRating? = {
+                            switch current {
+                            case nil: return .liked
+                            case .liked: return .disliked
+                            case .disliked: return nil
+                            }
+                        }()
+                        state.rate(t, rating: next, instanceDate: day.dateString)
+                    },
+                    onMore: { action in
+                        state.snapshotForUndo()
+                        switch action {
+                        case .archive:
+                            state.archiveTask(t)
+                            onAction(.archive, t)
+                        case .duplicate:
+                            state.duplicate(t)
+                            onAction(.duplicate, t)
+                        case .moveToInbox:
+                            state.moveToInbox(t)
+                            onAction(.moveToInbox, t)
+                        case .delete:
+                            state.deleteToTrash(t)
+                            onAction(.delete, t)
+                        case .edit:
+                            break
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder private func bulkBar(expanded: [TaskItem]) -> some View {
+        HStack {
+            Text("\(selectedIds.count) selected").font(.subheadline).bold()
+            Spacer()
+            Button {
+                state.snapshotForUndo()
+                for t in expanded where selectedIds.contains(t.id) { state.moveToInbox(t) }
+                selectedIds.removeAll(); isSelecting = false
+                if let first = expanded.first { onAction(.moveToInbox, first) }
+            } label: { Label("Move to Inbox", systemImage: "tray") }
+
+            Button {
+                state.snapshotForUndo()
+                for t in expanded where selectedIds.contains(t.id) { state.archiveTask(t) }
+                selectedIds.removeAll(); isSelecting = false
+                if let first = expanded.first { onAction(.archive, first) }
+            } label: { Label("Archive", systemImage: "archivebox") }
+            .buttonStyle(.borderedProminent)
+
+            Button(role: .destructive) {
+                state.snapshotForUndo()
+                for t in expanded where selectedIds.contains(t.id) { state.deleteToTrash(t) }
+                selectedIds.removeAll(); isSelecting = false
+                if let first = expanded.first { onAction(.delete, first) }
+            } label: { Label("Delete", systemImage: "trash") }
+        }
+        .padding(.top, 6)
     }
 
     private func dateLong(_ ds: String) -> String {
@@ -766,7 +759,7 @@ private struct DayModalView: View {
     }
 }
 
-// A single task row inside the Day modal
+// A single task row inside the Day modal (split up to keep type-check fast)
 private struct TaskLine: View {
     let t: TaskItem
     let dayString: String
@@ -779,6 +772,16 @@ private struct TaskLine: View {
     let onMore: (InboxRowAction) -> Void
 
     var body: some View {
+        VStack(spacing: 8) {
+            headerRow
+            statusRow
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.2)))
+    }
+
+    private var headerRow: some View {
         HStack(alignment: .top, spacing: 12) {
             if isSelecting {
                 Button(action: onToggleCheck) {
@@ -796,15 +799,12 @@ private struct TaskLine: View {
                     }
                     Spacer()
 
-                    // Icon-only buttons for repeat & rating
                     Menu {
                         Button("Never") { onSetRecurrence(.never) }
                         Button("Daily") { onSetRecurrence(.daily) }
                         Button("Weekly") { onSetRecurrence(.weekly) }
                         Button("Monthly") { onSetRecurrence(.monthly) }
-                    } label: {
-                        Image(systemName: "repeat")
-                    }
+                    } label: { Image(systemName: "repeat") }
 
                     Button(action: onRate) {
                         let r = t.completedOverrides?[dayString]?.rating
@@ -814,43 +814,35 @@ private struct TaskLine: View {
                                 "hand.thumbsup")
                     }
 
-                    // Three-dot menu (Delete wording)
                     Menu {
                         Button("Edit") { onMore(.edit) }
                         Button("Duplicate") { onMore(.duplicate) }
                         Button("Archive") { onMore(.archive) }
                         Button("Move to Inbox") { onMore(.moveToInbox) }
-                        Button(role: .destructive) { onMore(.delete) } label: {
-                            Text("Delete")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .imageScale(.large)
-                    }
-                }
-
-                // Status buttons (smaller, color-coded per status)
-                HStack(spacing: 6) {
-                    Button("Open") { onStatus(.notStarted) }
-                        .buttonStyle(.bordered)
-                        .tint(t.status == .notStarted ? .blue : .gray.opacity(0.5))
-                        .font(.caption)
-
-                    Button("Started") { onStatus(.started) }
-                        .buttonStyle(.bordered)
-                        .tint(t.status == .started ? .orange : .gray.opacity(0.5))
-                        .font(.caption)
-
-                    Button("Done") { onStatus(.completed) }
-                        .buttonStyle(.bordered)
-                        .tint(t.status == .completed ? .green : .gray.opacity(0.5))
-                        .font(.caption)
+                        Button(role: .destructive) { onMore(.delete) } label: { Text("Delete") }
+                    } label: { Image(systemName: "ellipsis.circle").imageScale(.large) }
                 }
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.2)))
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 6) {
+            Button("Open") { onStatus(.notStarted) }
+                .buttonStyle(.bordered)
+                .tint(t.status == .notStarted ? .blue : .gray.opacity(0.5))
+                .font(.caption)
+
+            Button("Started") { onStatus(.started) }
+                .buttonStyle(.bordered)
+                .tint(t.status == .started ? .orange : .gray.opacity(0.5))
+                .font(.caption)
+
+            Button("Done") { onStatus(.completed) }
+                .buttonStyle(.bordered)
+                .tint(t.status == .completed ? .green : .gray.opacity(0.5))
+                .font(.caption)
+        }
     }
 }
 
@@ -929,7 +921,7 @@ private struct StatsScreen: View {
     @ObservedObject var state: AppState
 
     var body: some View {
-        let (series, totals) = state.weeklySeries(lastWeeks: 8)
+        let (series, _) = state.weeklySeries(lastWeeks: 8)
         let counts = (
             completed: series.reduce(0) { $0 + $1.completed },
             started: series.reduce(0) { $0 + $1.open } - 0, // we only have open; keep simple
@@ -969,12 +961,10 @@ private struct SettingsScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 12) {
                     // Profile image placeholder sized to name/email block
-                    VStack {
-                        Spacer(minLength: 0)
-                    }
-                    .frame(width: 56, height: 56)
-                    .background(Circle().fill(Color.gray.opacity(0.2)))
-                    .overlay(Image(systemName: "person.fill").foregroundStyle(.secondary))
+                    VStack { Spacer(minLength: 0) }
+                        .frame(width: 56, height: 56)
+                        .background(Circle().fill(Color.gray.opacity(0.2)))
+                        .overlay(Image(systemName: "person.fill").foregroundStyle(.secondary))
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Adrian Kisliuk").font(.headline)
@@ -1014,7 +1004,6 @@ private struct PlaceholderSettingsDetail: View {
 }
 
 private struct ThemeSettingsView: View {
-    @Environment(\.colorScheme) var scheme
     @State private var chosen: String = "System Mode"
 
     var body: some View {
@@ -1034,14 +1023,12 @@ private struct ThemeSettingsView: View {
         }
         .padding()
         .navigationTitle("Theme")
-        .onChange(of: chosen) { newValue in
-            // For a real app, persist and use custom color scheme handling.
-            // Here we just demonstrate the selection UI; “System Mode” no-ops by design.
-        }
+        // iOS 17 two-parameter onChange signature (we no-op here by design)
+        .onChange(of: chosen) { _, _ in }
     }
 }
 
-// MARK: - Missing helper views (previous errors)
+// MARK: - Missing helper views
 
 // 1) Camera placeholder
 private struct CameraPlaceholder: View {
