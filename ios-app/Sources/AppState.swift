@@ -1,6 +1,137 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Core Data Models (Added here to resolve build errors)
+
+enum TaskStatus: String, Codable, CaseIterable, Identifiable {
+    case notStarted = "not_started"
+    case started
+    case completed
+    
+    var id: String { self.rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .notStarted: "To Do"
+        case .started: "Started"
+        case .completed: "Completed"
+        }
+    }
+}
+
+enum TaskRating: String, Codable {
+    case liked, disliked
+}
+
+enum Recurrence: String, Codable, CaseIterable, Identifiable {
+    case never, daily, weekly, monthly
+    var id: String { self.rawValue }
+}
+
+enum ArchiveTab: String, CaseIterable, Identifiable {
+    case not_started, started, completed, deleted
+    var id: String { rawValue }
+}
+
+struct TaskOverride: Codable, Hashable {
+    var status: TaskStatus?
+    var startedAt: Date?
+    var completedAt: Date?
+    var rating: TaskRating?
+}
+
+struct TaskItem: Identifiable, Codable, Equatable {
+    var id: Int
+    var text: String
+    var notes: String?
+    var date: String? // YYYY-MM-DD
+    var status: TaskStatus
+    var recurrence: Recurrence?
+    var createdAt: Date
+    var createdBy: String = "Adrian Kisliuk" // Default value
+    var assignedTo: String?
+    var startedAt: Date?
+    var completedAt: Date?
+    var completedOverrides: [String: TaskOverride]?
+    var parentId: Int? // Used for instances
+    var isInstance: Bool = false
+    var rating: TaskRating?
+
+    var isRecurring: Bool { recurrence != nil && recurrence != .never }
+
+    // Initializer from ArchivedTask
+    init(from archived: ArchivedTask) {
+        self.id = archived.id
+        self.text = archived.text
+        self.notes = archived.notes
+        self.date = archived.date
+        self.status = archived.status
+        self.recurrence = nil // Restored tasks lose recurrence
+        self.createdAt = archived.createdAt
+        self.createdBy = "Adrian Kisliuk"
+        self.assignedTo = nil // and assignment
+        self.startedAt = archived.startedAt
+        self.completedAt = archived.completedAt
+        self.completedOverrides = nil
+        self.rating = archived.rating
+    }
+    
+    // Default initializer
+    init(id: Int, text: String, notes: String?, date: String?, status: TaskStatus, recurrence: Recurrence?, createdAt: Date, createdBy: String = "Adrian Kisliuk", assignedTo: String? = nil, startedAt: Date? = nil, completedAt: Date? = nil, completedOverrides: [String : TaskOverride]?, parentId: Int? = nil, isInstance: Bool = false, rating: TaskRating? = nil) {
+        self.id = id
+        self.text = text
+        self.notes = notes
+        self.date = date
+        self.status = status
+        self.recurrence = recurrence
+        self.createdAt = createdAt
+        self.createdBy = createdBy
+        self.assignedTo = assignedTo
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.completedOverrides = completedOverrides
+        self.parentId = parentId
+        self.isInstance = isInstance
+        self.rating = rating
+    }
+}
+
+struct ArchivedTask: Identifiable, Codable {
+    var id: Int
+    var text: String
+    var notes: String?
+    var date: String?
+    var status: TaskStatus
+    var createdAt: Date
+    var startedAt: Date?
+    var completedAt: Date?
+    var archivedAt: Date
+    var archiveReason: String // "deleted", "not_started", "started", "completed"
+    var rating: TaskRating?
+    
+    // Custom initializer to create an ArchivedTask from a TaskItem
+    init(from task: TaskItem, reason: String, status: TaskStatus? = nil, startedAt: Date? = nil, completedAt: Date? = nil) {
+        self.id = task.id
+        self.text = task.text
+        self.notes = task.notes
+        self.date = task.date
+        self.status = status ?? task.status
+        self.createdAt = task.createdAt
+        self.startedAt = startedAt ?? task.startedAt
+        self.completedAt = completedAt ?? task.completedAt
+        self.archivedAt = Date()
+        self.archiveReason = reason
+        self.rating = task.rating
+    }
+}
+
+// MARK: - View / stats toggles
+enum StatsViewType: String, CaseIterable {
+    case summary, barchart
+}
+enum CalendarViewMode { case card, list }
+
+
 // MARK: - App State
 final class AppState: ObservableObject {
 
@@ -14,7 +145,20 @@ final class AppState: ObservableObject {
     @Published var archivedTasks: [ArchivedTask] = []
 
     // MARK: - UI state
-    @Published var activeTab: Tab = .home
+    @Published var activeTab: Tab = .home {
+        didSet {
+            // Logic to control search bar visibility
+            if activeTab == .search {
+                isSearchVisible.toggle()
+                // If we toggle search off, return to previous tab or home
+                if !isSearchVisible {
+                    activeTab = oldValue == .search ? .home : oldValue
+                }
+            } else {
+                isSearchVisible = false
+            }
+        }
+    }
     @Published var searchQuery: String = ""
     @Published var isSearchVisible = false
     @Published var isStatsViewActive = false
@@ -42,10 +186,8 @@ final class AppState: ObservableObject {
         undoState = (tasks, archivedTasks)
         snackbarMessage = message
         
-        // Cancel previous dismissal
         snackbarWorkItem?.cancel()
         
-        // Schedule new dismissal
         let workItem = DispatchWorkItem { [weak self] in
             self?.snackbarMessage = nil
             self?.undoState = nil
@@ -81,7 +223,6 @@ final class AppState: ObservableObject {
     // MARK: - Calendar expansion
 
     func calendarDays() -> [CalendarDay] {
-        // This logic remains the same as before
         if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             var days: [CalendarDay] = []
             var cur = calendarStartDate
@@ -95,7 +236,6 @@ final class AppState: ObservableObject {
             }
             return days
         } else {
-            // Search result logic
             var set = Set<String>()
             for t in filteredTasks {
                 guard let base = t.date else { continue }
@@ -144,6 +284,8 @@ final class AppState: ObservableObject {
                         inst.status = ov.status ?? .notStarted
                         inst.startedAt = ov.startedAt
                         inst.completedAt = ov.completedAt
+                        inst.parentId = t.id
+                        inst.rating = ov.rating
                         out.append(inst)
                     }
                     d = Self.step(d, by: rec)
@@ -185,7 +327,8 @@ final class AppState: ObservableObject {
     }
 
     func updateTask(_ task: TaskItem, text: String, notes: String?, date: String?, status: TaskStatus, recurrence: Recurrence, assignedTo: String?) {
-        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         
         saveUndoState(message: "Task updated")
         
@@ -208,7 +351,8 @@ final class AppState: ObservableObject {
     }
 
     func deleteToTrash(_ task: TaskItem) {
-        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         saveUndoState(message: "Task deleted")
         let t = tasks.remove(at: idx)
         let archived = ArchivedTask(from: t, reason: "deleted")
@@ -228,6 +372,8 @@ final class AppState: ObservableObject {
         copy.completedAt = nil
         copy.recurrence = nil
         copy.completedOverrides = nil
+        copy.isInstance = false
+        copy.parentId = nil
         if let i = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks.insert(copy, at: min(i+1, tasks.count))
         } else {
@@ -236,7 +382,8 @@ final class AppState: ObservableObject {
     }
 
     func moveToInbox(_ task: TaskItem) {
-        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         saveUndoState(message: "Task moved to Inbox")
         tasks[idx].date = nil
         tasks[idx].recurrence = nil
@@ -245,13 +392,15 @@ final class AppState: ObservableObject {
     }
 
     func reschedule(_ task: TaskItem, to newDate: String) {
-        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         saveUndoState(message: "Task rescheduled")
         tasks[idx].date = newDate
     }
 
     func updateRecurrence(_ task: TaskItem, to newRecurrence: Recurrence) {
-        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         if newRecurrence == .never {
             tasks[idx].recurrence = nil
             tasks[idx].completedOverrides = nil
@@ -262,13 +411,15 @@ final class AppState: ObservableObject {
     }
     
     func cycleRating(for task: TaskItem, instanceDate: String?) {
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let parentTask = tasks.first(where: { $0.id == parentId }) else { return }
+        
         let currentRating: TaskRating?
-        let isInstance = task.isInstance && instanceDate != nil
-
-        if isInstance, let ds = instanceDate {
-            currentRating = tasks.first(where: { $0.id == task.parentId })?.completedOverrides?[ds]?.rating
+        
+        if parentTask.isRecurring, let ds = instanceDate {
+            currentRating = parentTask.completedOverrides?[ds]?.rating
         } else {
-            currentRating = task.rating
+            currentRating = parentTask.rating
         }
 
         let newRating: TaskRating?
@@ -285,17 +436,13 @@ final class AppState: ObservableObject {
         let parentId = task.isInstance ? task.parentId : task.id
         guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         
-        let dateKey = instanceDate ?? task.date ?? ISO8601.dateOnly.string(from: Date())
-        
-        if tasks[idx].completedOverrides == nil { tasks[idx].completedOverrides = [:] }
-        var ov = tasks[idx].completedOverrides?[dateKey] ?? TaskOverride()
-        
-        ov.rating = rating
-        tasks[idx].completedOverrides?[dateKey] = ov
-        
-        // Also update the base task rating if it's not a recurring instance
-        if !task.isInstance {
-            tasks[idx].rating = rating
+        if tasks[idx].isRecurring, let ds = instanceDate {
+            if tasks[idx].completedOverrides == nil { tasks[idx].completedOverrides = [:] }
+            var ov = tasks[idx].completedOverrides?[ds] ?? TaskOverride()
+            ov.rating = rating
+            tasks[idx].completedOverrides?[ds] = ov
+        } else {
+             tasks[idx].rating = rating
         }
     }
     
@@ -345,7 +492,8 @@ final class AppState: ObservableObject {
     }
 
     func archiveTask(_ task: TaskItem) {
-        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let parentId = task.isInstance ? task.parentId : task.id
+        guard let idx = tasks.firstIndex(where: { $0.id == parentId }) else { return }
         saveUndoState(message: "Task archived")
         let t = tasks.remove(at: idx)
         let archived = ArchivedTask(from: t, reason: t.status.rawValue)
@@ -369,7 +517,6 @@ final class AppState: ObservableObject {
     func archiveSelectedInbox() {
         guard !selectedInboxTaskIds.isEmpty else { return }
         saveUndoState(message: "\(selectedInboxTaskIds.count) tasks archived")
-        let now = Date()
         let (toArchive, toKeep) = tasks.partitioned { selectedInboxTaskIds.contains($0.id) }
         tasks = toKeep
         archivedTasks.append(contentsOf: toArchive.map {
@@ -404,12 +551,99 @@ final class AppState: ObservableObject {
     }
     
     func reorderInboxTasks(from source: IndexSet, to destination: Int) {
-        var unassigned = self.unassignedTasks
-        unassigned.move(fromOffsets: source, toOffset: destination)
+        var unassignedIndices: [Int] = []
+        for i in 0..<tasks.count {
+            if tasks[i].date == nil {
+                unassignedIndices.append(i)
+            }
+        }
         
-        let assigned = self.tasks.filter { $0.date != nil }
-        self.tasks = assigned + unassigned
+        let movedTaskIndices = source.map { unassignedIndices[$0] }
+        
+        let tasksToMove = movedTaskIndices.map { tasks[$0] }
+        
+        for index in movedTaskIndices.sorted(by: >) {
+            tasks.remove(at: index)
+        }
+        
+        let destinationIndex: Int
+        if destination < unassignedIndices.count {
+            destinationIndex = unassignedIndices[destination]
+            let taskAtDestination = tasks[destinationIndex]
+            if let finalIndex = tasks.firstIndex(of: taskAtDestination) {
+                 tasks.insert(contentsOf: tasksToMove, at: finalIndex)
+            }
+        } else {
+            tasks.append(contentsOf: tasksToMove)
+        }
     }
-
-    // Other methods like stats helpers can remain largely the same...
 }
+
+
+// MARK: - Sample Data & Helpers (Also moved here)
+enum SampleData {
+    static func generateTasks() -> [TaskItem] {
+        var items: [TaskItem] = []
+        func d(_ s: String) -> Date { ISO8601.dateTime.date(from: s) ?? Date() }
+        func od(_ s: String) -> Date? { ISO8601.dateTime.date(from: s) }
+        
+        let fixed: [TaskItem] = [
+             TaskItem(id: 101, text: "Plan team lunch", notes: "Decide location.", date: "2025-10-03", status: .notStarted, recurrence: nil, createdAt: Date()),
+             TaskItem(id: 102, text: "Prep presentation", notes: "Q3 metrics.", date: "2025-10-02", status: .started, recurrence: nil, createdAt: d("2025-09-30T10:00:00Z"), startedAt: od("2025-10-01T14:00:00Z")),
+             TaskItem(id: 103, text: "Submit report", notes: "Submitted yesterday.", date: "2025-10-01", status: .completed, recurrence: nil, createdAt: d("2025-09-29T09:00:00Z"), startedAt: od("2025-10-01T09:00:00Z"), completedAt: od("2025-10-01T11:30:00Z"), completedOverrides: ["2025-10-01": .init(rating: .liked)]),
+             TaskItem(id: 104, text: "Review mockups", notes: "Mobile responsiveness.", date: "2025-10-02", status: .notStarted, recurrence: nil, createdAt: Date()),
+             TaskItem(id: 105, text: "Daily Standup", notes: "", date: "2025-09-01", status: .notStarted, recurrence: .daily, createdAt: d("2025-08-01T09:00:00Z"), completedOverrides: [:])
+        ]
+        items.append(contentsOf: fixed)
+        
+        let sampleTexts = ["Finalize Q4 budget", "Design auth flow", "Develop user API", "Write SDK docs", "Plan social media", "Fix memory leak"]
+        let start = Calendar.current.date(byAdding: .day, value: -60, to: Date())!
+        let end = Calendar.current.date(byAdding: .day, value: 30, to: Date())!
+        func randDate(_ a: Date, _ b: Date) -> Date {
+            let t = TimeInterval.random(in: a.timeIntervalSince1970...b.timeIntervalSince1970)
+            return Date(timeIntervalSince1970: t)
+        }
+
+        for i in 1...60 {
+            let assigned = Double.random(in: 0...1) > 0.25
+            let dateStr: String? = assigned ? ISO8601.dateOnly.string(from: randDate(start, end)) : nil
+            let status: TaskStatus = assigned ? [.completed, .started, .notStarted].randomElement()! : .notStarted
+            let createdAt = randDate(start, Date())
+            
+            items.append(TaskItem(id: 1000 + i, text: sampleTexts.randomElement()!, notes: nil, date: dateStr, status: status, recurrence: nil, createdAt: createdAt))
+        }
+        return items
+    }
+}
+
+extension String {
+    var asISODateOnlyUTC: Date? {
+        ISO8601.dateOnly.date(from: self)
+    }
+}
+
+extension ISO8601DateFormatter {
+    static let dateOnly: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withFullDate]
+        return f
+    }()
+    
+    static let dateTime: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+}
+
+extension Array {
+    func partitioned(by predicate: (Element) -> Bool) -> ([Element], [Element]) {
+        var matching: [Element] = []
+        var rest: [Element] = []
+        for e in self {
+            if predicate(e) { matching.append(e) } else { rest.append(e) }
+        }
+        return (matching, rest)
+    }
+}
+
