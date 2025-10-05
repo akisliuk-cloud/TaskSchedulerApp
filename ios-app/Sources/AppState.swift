@@ -96,7 +96,7 @@ struct TaskItem: Identifiable, Codable, Equatable {
     }
 }
 
-struct ArchivedTask: Identifiable, Codable {
+struct ArchivedTask: Identifiable, Codable, Hashable {
     var id: Int
     var text: String
     var notes: String?
@@ -122,6 +122,16 @@ struct ArchivedTask: Identifiable, Codable {
         self.archivedAt = Date()
         self.archiveReason = reason
         self.rating = task.rating
+    }
+    
+    // ** FIX FOR BUILD ERROR **
+    // Manual conformance to Equatable and Hashable
+    static func == (lhs: ArchivedTask, rhs: ArchivedTask) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
 
