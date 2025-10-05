@@ -2,6 +2,14 @@ import SwiftUI
 import Foundation
 import Charts
 
+// MARK: - View-specific Models (Moved here to resolve build error)
+struct CalendarDay: Identifiable, Hashable {
+    var id = UUID()
+    var dateString: String
+    var dayName: String
+    var dayOfMonth: Int
+}
+
 // MARK: - Main App View
 struct ContentView: View {
     @StateObject private var state = AppState()
@@ -86,18 +94,16 @@ private struct CustomTabBar: View {
         HStack {
             ForEach(Tab.allCases) { tab in
                 Button {
+                    // Toggle search visibility when search tab is tapped
                     if tab == .search {
-                        // Special action for search
-                        if activeTab == .search {
-                            activeTab = .home // Or whatever default is
-                        } else {
-                            activeTab = .search
-                        }
+                        // This will be handled by observing activeTab change
                     } else if tab == .settings {
                         showSettings()
-                    } else {
-                        activeTab = tab
                     }
+                    
+                    // Always update the active tab
+                    activeTab = tab
+                    
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)
@@ -168,7 +174,18 @@ private struct CalendarPanel: View {
                 } label: { Image(systemName: "calendar.circle") }
                 
                 Menu {
-                    // Filter menu content here...
+                     Toggle(isOn: Binding(
+                         get: { state.calendarFilters[.notStarted] ?? true },
+                         set: { state.calendarFilters[.notStarted] = $0 }
+                     )) { Text("Open") }
+                     Toggle(isOn: Binding(
+                         get: { state.calendarFilters[.started] ?? true },
+                         set: { state.calendarFilters[.started] = $0 }
+                     )) { Text("Started") }
+                     Toggle(isOn: Binding(
+                         get: { state.calendarFilters[.completed] ?? true },
+                         set: { state.calendarFilters[.completed] = $0 }
+                     )) { Text("Done") }
                 } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
                 
                 Button {
@@ -708,3 +725,4 @@ enum Tab: String, CaseIterable, Identifiable {
         }
     }
 }
+
