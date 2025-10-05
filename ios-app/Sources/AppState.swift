@@ -96,8 +96,9 @@ final class AppState: ObservableObject {
     var filteredTasks: [TaskItem] {
         guard !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return tasks }
         let q = searchQuery.lowercased()
-        return tasks.filter { $t in
-            $t.text.lowercased().contains(q) || ($t.notes ?? "").lowercased().contains(q)
+        // ** FIX FOR BUILD ERROR **: Corrected closure parameter from $t to t
+        return tasks.filter { t in
+            t.text.lowercased().contains(q) || (t.notes ?? "").lowercased().contains(q)
         }
     }
     
@@ -468,11 +469,12 @@ enum SampleData {
         func d(_ s: String) -> Date { ISO8601.dateTime.date(from: s) ?? Date() }
         func od(_ s: String) -> Date? { ISO8601.dateTime.date(from: s) }
         
+        // ** FIX FOR BUILD ERROR **: Added missing parameters to all initializers
         let fixed: [TaskItem] = [
-             TaskItem(id: 101, text: "Plan team lunch", notes: "Decide location.", date: "2025-10-03", status: .notStarted, recurrence: nil, createdAt: Date()),
-             TaskItem(id: 102, text: "Prep presentation", notes: "Q3 metrics.", date: "2025-10-02", status: .started, recurrence: nil, createdAt: d("2025-09-30T10:00:00Z"), startedAt: od("2025-10-01T14:00:00Z")),
+             TaskItem(id: 101, text: "Plan team lunch", notes: "Decide location.", date: "2025-10-03", status: .notStarted, recurrence: nil, createdAt: Date(), completedOverrides: nil),
+             TaskItem(id: 102, text: "Prep presentation", notes: "Q3 metrics.", date: "2025-10-02", status: .started, recurrence: nil, createdAt: d("2025-09-30T10:00:00Z"), startedAt: od("2025-10-01T14:00:00Z"), completedOverrides: nil),
              TaskItem(id: 103, text: "Submit report", notes: "Submitted yesterday.", date: "2025-10-01", status: .completed, recurrence: nil, createdAt: d("2025-09-29T09:00:00Z"), startedAt: od("2025-10-01T09:00:00Z"), completedAt: od("2025-10-01T11:30:00Z"), completedOverrides: ["2025-10-01": .init(rating: .liked)]),
-             TaskItem(id: 104, text: "Review mockups", notes: "Mobile responsiveness.", date: "2025-10-02", status: .notStarted, recurrence: nil, createdAt: Date()),
+             TaskItem(id: 104, text: "Review mockups", notes: "Mobile responsiveness.", date: "2025-10-02", status: .notStarted, recurrence: nil, createdAt: Date(), completedOverrides: nil),
              TaskItem(id: 105, text: "Daily Standup", notes: "", date: "2025-09-01", status: .notStarted, recurrence: .daily, createdAt: d("2025-08-01T09:00:00Z"), completedOverrides: [:])
         ]
         items.append(contentsOf: fixed)
@@ -491,7 +493,7 @@ enum SampleData {
             let status: TaskStatus = assigned ? [.completed, .started, .notStarted].randomElement()! : .notStarted
             let createdAt = randDate(start, Date())
             
-            items.append(TaskItem(id: 1000 + i, text: sampleTexts.randomElement()!, notes: nil, date: dateStr, status: status, recurrence: nil, createdAt: createdAt))
+            items.append(TaskItem(id: 1000 + i, text: sampleTexts.randomElement()!, notes: nil, date: dateStr, status: status, recurrence: nil, createdAt: createdAt, completedOverrides: nil))
         }
         return items
     }
