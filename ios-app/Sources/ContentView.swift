@@ -2,7 +2,7 @@ import SwiftUI
 import Foundation
 import Charts
 
-// MARK: - View-specific Models (Moved here to resolve build error)
+// MARK: - View-specific Models
 struct CalendarDay: Identifiable, Hashable {
     var id = UUID()
     var dateString: String
@@ -389,7 +389,7 @@ private struct DayRow: View {
     }
     private func dateLong(_ ds: String) -> String {
         guard let d = ds.asISODateOnlyUTC else { return ds }
-        return d.formatted(.dateTime.weekday(.long).month(.long).day())
+        return d.formatted(date: .long, time: .omitted)
     }
 }
 
@@ -679,7 +679,7 @@ private struct SnackbarView: View {
         .padding()
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .onAppear { withAnimation { isVisible = true } }
-        .onChange(of: message) { _ in
+        .onChange(of: message) {
             withAnimation {
                 isVisible = true
             }
@@ -726,5 +726,29 @@ enum Tab: String, CaseIterable, Identifiable {
         case .settings: return "gear"
         }
     }
+}
+
+// MARK: - Date helpers (Moved from TaskModels.swift)
+enum ISO8601 {
+    static let dateOnly: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .iso8601)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    static let dateTime: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f
+    }()
+}
+
+extension String {
+    /// Parse yyyy-MM-dd -> Date in UTC
+    var asISODateOnlyUTC: Date? { ISO8601.dateOnly.date(from: self) }
 }
 
