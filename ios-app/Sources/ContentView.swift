@@ -303,6 +303,24 @@ private struct InboxPanel: View {
             header
             inputRow
             listArea
+
+            // Bulk action bar (matches daily calendar modal style)
+            if state.isBulkSelectActiveInbox, !state.selectedInboxTaskIds.isEmpty {
+                HStack {
+                    Text("\(state.selectedInboxTaskIds.count) selected").font(.subheadline).bold()
+                    Spacer()
+                    Menu("Actions") {
+                        Button("Archive") {
+                            state.archiveSelectedInbox()
+                        }
+                        Button("Delete", role: .destructive) {
+                            state.deleteSelectedInbox()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.top, 6)
+            }
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -332,6 +350,11 @@ private struct InboxPanel: View {
                     .background(Capsule().fill(Color.secondary.opacity(0.2)))
             }
             Spacer()
+
+            // NEW: Select / Cancel (toggles bulk-select mode)
+            Button(state.isBulkSelectActiveInbox ? "Cancel" : "Select") {
+                state.toggleBulkSelectInbox()
+            }
         }
     }
 
@@ -370,6 +393,19 @@ private struct InboxPanel: View {
     @ViewBuilder private func inboxRow(_ t: TaskItem) -> some View {
         let isEditing = editingTaskId == t.id
         HStack(alignment: .top, spacing: 10) {
+            // NEW: Checkbox left of each task when bulk-select is active
+            if state.isBulkSelectActiveInbox {
+                Button {
+                    if state.selectedInboxTaskIds.contains(t.id) {
+                        state.selectedInboxTaskIds.remove(t.id)
+                    } else {
+                        state.selectedInboxTaskIds.insert(t.id)
+                    }
+                } label: {
+                    Image(systemName: state.selectedInboxTaskIds.contains(t.id) ? "checkmark.square" : "square")
+                }
+            }
+
             if isEditing {
                 InboxEditForm(
                     t: t,
