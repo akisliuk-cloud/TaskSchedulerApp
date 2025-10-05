@@ -680,7 +680,9 @@ private struct SnackbarView: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .onAppear { withAnimation { isVisible = true } }
         .onChange(of: message) { _ in
-            isVisible = true
+            withAnimation {
+                isVisible = true
+            }
         }
     }
 }
