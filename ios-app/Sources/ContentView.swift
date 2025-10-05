@@ -1,414 +1,718 @@
-// ios-app/Sources/ContentView.swift
 import SwiftUI
+import Foundation
 import Charts
 
-// MARK: - Tabs
-private enum MainTab: Hashable { case home, stats, camera, archive, settings }
+// MARK: - Small helpers for scroll targets
+private func dayCardID(_ dateStr: String) -> String { "card-\(dateStr)" }
+private func dayListID(_ dateStr: String) -> String { "list-\(dateStr)" }
 
-// MARK: - Root
+// MARK: - Reusable empty state
+struct CompatEmptyState: View {
+    let title: String
+    let systemImage: String
+    var body: some View {
+        Group {
+            if #available(iOS 17.0, *) {
+                ContentUnavailableView(title, systemImage: systemImage)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: systemImage).font(.system(size: 40)).foregroundColor(.secondary)
+                    Text(title).font(.headline).foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+// MARK: - Root ContentView
 struct ContentView: View {
     @StateObject private var state = AppState()
 
-    // Nav + header/search
-    @State private var tab: MainTab = .home
-    @State private var isSearchVisible = false
+    // Current section
+    enum Tab { case home, stats, camera, archives, search, settings }
+    @State private var tab: Tab = .home
 
-    // Day modal
+    // Overlays / sheets
     @State private var showingDay: CalendarDay? = nil
+    @State private var isModalBulkSelect = false
+    @State private var selectedModalIds = Set<Int>()
 
-    // Collapsible sections
-    @State private var isCalendarExpanded = true
-    @State private var isInboxExpanded = true
+    // Settings
+    @State private var showSettings = false
+    @State private var isDarkMode = false
 
-    // New task
-    @State private var newTaskText = ""
+    // Search bar under the title (appears when bottom Search is active)
+    @State private var showSearchBar = false
 
-    // Snackbar (undo)
-    @State private var snackbarMessage: String = ""
-    @State private var showSnackbar = false
-    @State private var snackbarUndoAction: (() -> Void)? = nil
+    // Undo snackbar
+    @State private var snackbarText: String = ""
+    @State private var snackbarVisible: Bool = false
+    @State private var snackbarUndo: (() -> Void)? = nil
 
-    // Calendar filter cache (icon menu writes into state.calendarFilters)
-    @State private var filterOpen = true
-    @State private var filterStarted = true
-    @State private var filterDone = true
+    // Stats period controls
+    enum Period: String, CaseIterable { case weekly, monthly, quarterly, semester, yearly, custom }
+    @State private var statsPeriod: Period = .weekly
+    @State private var customStart: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var customEnd: Date = Date()
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 header
-
-                if isSearchVisible {
-                    TextField("Search tasks…", text: $state.searchQuery)
-                        .textFieldStyle(.roundedBorder)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
-                Group {
-                    switch tab {
-                    case .home:
-                        HomeScreen(
-                            state: state,
-                            isCalendarExpanded: $isCalendarExpanded,
-                            isInboxExpanded: $isInboxExpanded,
-                            onShowDay: { showingDay = $0 },
-                            onAddTask: addTaskWithUndo(_:),
-                            filterOpen: $filterOpen,
-                            filterStarted: $filterStarted,
-                            filterDone: $filterDone,
-                            showUndo: showUndo(_:undo:)
-                        )
-                    case .stats:
-                        StatsScreen(state: state)
-                    case .archive:
-                        ArchivesScreen(state: state)
-                    case .camera:
-                        CameraPlaceholder()
-                    case .settings:
-                        SettingsScreen()
+                if showSearchBar {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                        TextField("Search tasks…", text: $state.searchQuery)
+                            .textFieldStyle(.roundedBorder)
                     }
+                    .padding(.horizontal)
                 }
 
+                contentArea
                 bottomBar
             }
-            .padding([.horizontal, .top])
-            .padding(.bottom, 8)
+            .padding(.top, 8)
+            .preferredColorScheme(isDarkMode ? .dark : .light)
 
-            if showSnackbar {
-                SnackbarView(message: snackbarMessage) {
-                    snackbarUndoAction?()
+            // Snackbar overlay
+            if snackbarVisible {
+                Snackbar(text: snackbarText, onUndo: {
+                    snackbarUndo?()
                     hideSnackbar()
-                } onDismiss: { hideSnackbar() }
+                }, onDismiss: {
+                    hideSnackbar()
+                })
                 .transition(.move(edge: .bottom).combined(with: .opacity))
-                .padding(.bottom, 60)
+                .zIndex(10)
             }
         }
         .sheet(item: $showingDay) { day in
-            DayModalView(day: day, state: state) { kind, _ in
-                switch kind {
-                case .archive:      showUndo("Task archived")     { state.undoToLastSnapshot() }
-                case .delete:       showUndo("Task deleted")      { state.undoToLastSnapshot() }
-                case .duplicate:    showUndo("Task duplicated")   { state.undoToLastSnapshot() }
-                case .moveToInbox:  showUndo("Moved to Inbox")    { state.undoToLastSnapshot() }
-                case .reschedule:   showUndo("Task rescheduled")  { state.undoToLastSnapshot() }
+            DayModalView(
+                day: day,
+                state: state,
+                isBulk: $isModalBulkSelect,
+                selectedIds: $selectedModalIds,
+                // Undo hook: snapshot -> do -> snackbar
+                onAboutToMutate: snapshotUndo,
+                triggerUndoSnack: triggerUndoSnack
+            )
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsSheet(isDarkMode: $isDarkMode)
+                .presentationDetents([.large])
+        }
+    }
+
+    // MARK: Header (title only)
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text("Taskmate")              // app name
+                .font(.title2)            // a bit smaller than .title
+                .fontWeight(.semibold)
+            Spacer()
+        }
+        .padding(.horizontal)
+    }
+
+    // MARK: Main content switcher
+    private var contentArea: some View {
+        Group {
+            switch tab {
+            case .home, .search, .camera: // camera doesn't change content, only highlights in bar
+                HomeComposite(
+                    state: state,
+                    onOpenDay: { showingDay = $0 },
+                    onAboutToMutate: snapshotUndo,
+                    triggerUndoSnack: triggerUndoSnack
+                )
+            case .archives:
+                ArchivesView(state: state)
+            case .stats:
+                StatsView(
+                    state: state,
+                    period: $statsPeriod,
+                    customStart: $customStart,
+                    customEnd: $customEnd
+                )
+            case .settings:
+                SettingsLanding(openSheet: { showSettings = true })
+            }
+        }
+        .padding(.horizontal)
+        .animation(.default, value: tab)
+    }
+
+    // MARK: Bottom menu bar
+    private var bottomBar: some View {
+        HStack {
+            barButton(icon: "house", isActive: tab == .home) {
+                tab = .home
+                showSearchBar = false
+                state.isArchiveViewActive = false
+                state.isStatsViewActive = false
+            }
+            barButton(icon: "chart.bar", isActive: tab == .stats) {
+                tab = .stats
+                showSearchBar = false
+                state.isStatsViewActive = true
+                state.isArchiveViewActive = false
+            }
+            barButton(icon: "camera", isActive: tab == .camera) {
+                // Only highlight selection per spec
+                tab = .camera
+                showSearchBar = false
+            }
+            barButton(icon: "archivebox", isActive: tab == .archives) {
+                tab = .archives
+                showSearchBar = false
+                state.isArchiveViewActive = true
+                state.isStatsViewActive = false
+            }
+            barButton(icon: "magnifyingglass", isActive: tab == .search) {
+                // Show search bar regardless of tab; stay on current area if already not home? Spec says searchable across tabs.
+                showSearchBar = true
+                tab = .search
+            }
+            barButton(icon: "gearshape", isActive: tab == .settings) {
+                tab = .settings
+                showSearchBar = false
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal)
+        .padding(.top, 6)
+    }
+
+    private func barButton(icon: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .imageScale(.large)
+                .foregroundStyle(isActive ? .blue : .primary)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Undo helpers
+    private func snapshotUndo() {
+        state.snapshotForUndo()
+    }
+    private func triggerUndoSnack(_ actionText: String) {
+        snackbarText = "\(actionText) • Undo?"
+        snackbarUndo = { state.undoToLastSnapshot() }
+        withAnimation { snackbarVisible = true }
+        // Auto-hide after 4s
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            hideSnackbar()
+        }
+    }
+    private func hideSnackbar() {
+        withAnimation { snackbarVisible = false }
+        snackbarUndo = nil
+    }
+}
+
+// MARK: - Home composite (Calendar + Inbox, collapsible)
+private struct HomeComposite: View {
+    @ObservedObject var state: AppState
+    var onOpenDay: (CalendarDay) -> Void
+
+    // Undo hooks (from parent)
+    var onAboutToMutate: () -> Void
+    var triggerUndoSnack: (_ actionText: String) -> Void
+
+    @State private var calendarExpanded = true
+    @State private var inboxExpanded = true
+
+    var body: some View {
+        VStack(spacing: 12) {
+
+            // Daily Calendar section
+            SectionHeader(title: "Daily Calendar", expanded: $calendarExpanded)
+            if calendarExpanded {
+                CalendarPanel(
+                    state: state,
+                    openDay: onOpenDay,
+                    onAboutToMutate: onAboutToMutate,
+                    triggerUndoSnack: triggerUndoSnack
+                )
+            }
+
+            // Task List section
+            SectionHeader(
+                title: "Task List",
+                expanded: $inboxExpanded,
+                showsSelect: true,
+                isSelecting: state.isBulkSelectActiveInbox,
+                onSelectToggle: { state.toggleBulkSelectInbox() }
+            )
+            if inboxExpanded {
+                InboxPanel(
+                    state: state,
+                    onAboutToMutate: onAboutToMutate,
+                    triggerUndoSnack: triggerUndoSnack
+                )
+                .overlay(alignment: .bottom) {
+                    if state.isBulkSelectActiveInbox && !state.selectedInboxTaskIds.isEmpty {
+                        BulkActionBar(
+                            count: state.selectedInboxTaskIds.count,
+                            onArchive: {
+                                onAboutToMutate()
+                                state.archiveSelectedInbox()
+                                triggerUndoSnack("Archived")
+                            },
+                            onDelete: {
+                                onAboutToMutate()
+                                state.deleteSelectedInbox()
+                                triggerUndoSnack("Deleted")
+                            }
+                        )
+                        .transition(.move(edge: .bottom))
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 2)
+                    }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Section header with collapsible arrow + optional Select
+private struct SectionHeader: View {
+    let title: String
+    @Binding var expanded: Bool
+    var showsSelect: Bool = false
+    var isSelecting: Bool = false
+    var onSelectToggle: (() -> Void)? = nil
+
+    var body: some View {
+        HStack {
+            Button {
+                withAnimation { expanded.toggle() }
+            } label: {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .imageScale(.medium)
+            }
+            .buttonStyle(.plain)
+
+            Text(title).font(.title3).bold()
+            Spacer()
+
+            if showsSelect, let onSelectToggle {
+                Button(isSelecting ? "Cancel" : "Select", action: onSelectToggle)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 4)
+    }
+}
+
+// MARK: - Snackbar
+private struct Snackbar: View {
+    let text: String
+    let onUndo: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(text).lineLimit(1).font(.subheadline)
+            Spacer()
+            Button("Undo", action: onUndo)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+}
+
+// MARK: - Calendar panel
+private struct CalendarPanel: View {
+    @ObservedObject var state: AppState
+    var openDay: (CalendarDay) -> Void
+
+    // Undo hooks
+    var onAboutToMutate: () -> Void
+    var triggerUndoSnack: (_ actionText: String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Top controls: icons only
+            HStack(spacing: 8) {
+                // View picker icon toggler: card/list
+                Button {
+                    withAnimation {
+                        state.calendarViewMode = (state.calendarViewMode == .card ? .list : .card)
+                    }
+                } label: {
+                    Image(systemName: state.calendarViewMode == .card ? "rectangle.grid.2x2" : "list.bullet")
+                }
+                .buttonStyle(.bordered)
+
+                // Filter menu icon
+                Menu {
+                    Toggle(isOn: Binding(
+                        get: { state.calendarFilters[.notStarted] ?? true },
+                        set: { state.calendarFilters[.notStarted] = $0 }
+                    )) { Text("Open") }
+                    Toggle(isOn: Binding(
+                        get: { state.calendarFilters[.started] ?? true },
+                        set: { state.calendarFilters[.started] = $0 }
+                    )) { Text("Started") }
+                    Toggle(isOn: Binding(
+                        get: { state.calendarFilters[.completed] ?? true },
+                        set: { state.calendarFilters[.completed] = $0 }
+                    )) { Text("Done") }
+                } label: {
+                    Image(systemName: "line.horizontal.3.decrease.circle")
+                }
+                .buttonStyle(.bordered)
+
+                Divider().frame(height: 22)
+
+                // Today icon
+                Button {
+                    withAnimation {
+                        state.calendarStartDate = Calendar.current.date(byAdding: .day, value: -3, to: Date()) ?? Date()
+                    }
+                } label: {
+                    Image(systemName: "target")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Spacer()
+            }
+            .padding(.horizontal)
+
+            let days = state.calendarDays()
+            let expanded = state.visibleCalendarTasks(for: days)
+            let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
+
+            if state.calendarViewMode == .card {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(days) { day in
+                                let list = (tasksByDay[day.dateString] ?? [])
+                                    .filter { state.calendarFilters[$0.status] ?? true }
+                                DayCard(
+                                    day: day,
+                                    tasks: list,
+                                    bg: Color(.systemBackground)
+                                ) { openDay(day) }
+                                .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
+                                    handleDropToDay(day: day, providers: providers)
+                                })
+                                .id(dayCardID(day.dateString))
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .onAppear {
+                            let today = ISO8601.dateOnly.string(from: Date())
+                            withAnimation { proxy.scrollTo(dayCardID(today), anchor: .leading) }
+                        }
+                    }
+                }
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(days) { day in
+                                let list = (tasksByDay[day.dateString] ?? [])
+                                    .filter { state.calendarFilters[$0.status] ?? true }
+                                if state.searchQuery.isEmpty && list.isEmpty {
+                                    EmptyView()
+                                } else {
+                                    DayRow(
+                                        day: day,
+                                        tasks: list,
+                                        bg: Color(.systemBackground)
+                                    ) { openDay(day) }
+                                    .id(dayListID(day.dateString))
+                                }
+                            }
+                            if expanded.filter({ state.calendarFilters[$0.status] ?? true }).isEmpty {
+                                CompatEmptyState(title: "No scheduled tasks in this period match your filters", systemImage: "calendar")
+                                    .padding(.top, 16)
+                            }
+                        }
+                        .onAppear {
+                            let today = ISO8601.dateOnly.string(from: Date())
+                            withAnimation { proxy.scrollTo(dayListID(today), anchor: .top) }
+                        }
+                    }
+                    .frame(height: 260)
+                }
+            }
+        }
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func handleDropToDay(day: CalendarDay, providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
+            guard
+                let d = data as? Data,
+                let idStr = String(data: d, encoding: .utf8),
+                let id = Int(idStr)
+            else { return }
+            DispatchQueue.main.async {
+                if let t = state.tasks.first(where: { $0.id == id }) {
+                    onAboutToMutate()
+                    state.reschedule(t, to: day.dateString)
+                    triggerUndoSnack("Moved")
+                }
+            }
+        }
+        return true
+    }
+}
+
+// MARK: - Inbox panel
+private struct InboxPanel: View {
+    @ObservedObject var state: AppState
+
+    // Undo hooks
+    var onAboutToMutate: () -> Void
+    var triggerUndoSnack: (_ actionText: String) -> Void
+
+    // Local states
+    @State private var newTaskText = ""
+    @State private var editingTaskId: Int? = nil
+    @State private var editText = ""
+    @State private var editNotes = ""
+    @State private var editDate: String = ""
+    @State private var editStatus: TaskStatus = .notStarted
+    @State private var editRecurrence: Recurrence = .never
+    @State private var showEditSheet = false
+
+    // Assign/Created meta
+    @State private var createdBy: String = "Adrian Kisliuk"
+    @State private var assignedTo: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            inputRow
+            listArea
+        }
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
+            // Dropping into empty space moves task to inbox
+            guard let provider = providers.first else { return false }
+            provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
+                guard
+                    let d = data as? Data,
+                    let idStr = String(data: d, encoding: .utf8),
+                    let id = Int(idStr),
+                    let t = state.tasks.first(where: { $0.id == id })
+                else { return }
+                DispatchQueue.main.async {
+                    onAboutToMutate()
+                    state.moveToInbox(t)
+                    triggerUndoSnack("Moved to Inbox")
+                }
+            }
+            return true
+        })
+        .sheet(isPresented: $showEditSheet) {
+            EditTaskSheet(
+                title: $editText,
+                notes: $editNotes,
+                dateStr: $editDate,
+                status: $editStatus,
+                recurrence: $editRecurrence,
+                createdBy: $createdBy,
+                assignedTo: $assignedTo,
+                onCancel: {
+                    showEditSheet = false
+                    editingTaskId = nil
+                },
+                onSave: {
+                    guard let id = editingTaskId,
+                          let idx = state.tasks.firstIndex(where: { $0.id == id }) else {
+                        showEditSheet = false; return
+                    }
+                    onAboutToMutate()
+                    if editStatus == .completed, !(state.tasks[idx].isRecurring), !editDate.isEmpty {
+                        var done = state.tasks[idx]
+                        done.text = editText.trimmingCharacters(in: .whitespaces)
+                        done.notes = editNotes.trimmingCharacters(in: .whitespaces)
+                        done.date = editDate
+                        state.updateStatus(done, to: .completed)
+                    } else {
+                        state.tasks[idx].text = editText.trimmingCharacters(in: .whitespaces)
+                        state.tasks[idx].notes = editNotes.trimmingCharacters(in: .whitespaces)
+                        state.tasks[idx].date = editDate.isEmpty ? nil : editDate
+                        state.updateStatus(state.tasks[idx], to: editStatus)
+                        state.updateRecurrence(state.tasks[idx], to: editRecurrence)
+                    }
+                    // Save assignment meta
+                    state.taskMeta[id] = .init(createdBy: createdBy, assignedTo: assignedTo)
+                    triggerUndoSnack("Edited")
+                    showEditSheet = false
+                    editingTaskId = nil
+                }
+            )
             .presentationDetents([.medium, .large])
         }
     }
 
-    // MARK: Header
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("Taskmate")
-                .font(.title.bold()) // slightly smaller than largeTitle
-            Spacer()
-        }
-    }
-
-    // MARK: Bottom bar
-    private var bottomBar: some View {
-        HStack {
-            BarIcon(system: "house", isActive: tab == .home) {
-                tab = .home; isSearchVisible = false
-            }
-            BarIcon(system: "chart.bar.xaxis", isActive: tab == .stats) {
-                tab = .stats; isSearchVisible = false
-            }
-            BarIcon(system: "camera", isActive: tab == .camera) {
-                tab = .camera; isSearchVisible = false
-            }
-            BarIcon(system: "archivebox", isActive: tab == .archive) {
-                tab = .archive; isSearchVisible = false
-            }
-            BarIcon(system: "magnifyingglass", isActive: isSearchVisible) {
-                withAnimation { isSearchVisible.toggle() }
-            }
-            BarIcon(system: "gearshape", isActive: tab == .settings) {
-                tab = .settings; isSearchVisible = false
-            }
-        }
-        .padding(.horizontal)
-        .frame(height: 52)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-    }
-
-    // MARK: Undo helpers
-    private func showUndo(_ message: String, undo: @escaping () -> Void) {
-        snackbarMessage = message
-        snackbarUndoAction = undo
-        withAnimation { showSnackbar = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { hideSnackbar() }
-    }
-    private func hideSnackbar() {
-        withAnimation { showSnackbar = false }
-        snackbarUndoAction = nil
-    }
-
-    private func addTaskWithUndo(_ text: String) {
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        state.snapshotForUndo()
-        state.addTask(text: text)
-        showUndo("Task added") { state.undoToLastSnapshot() }
-    }
-}
-
-// MARK: - Home Screen (Calendar + Task List)
-private struct HomeScreen: View {
-    @ObservedObject var state: AppState
-    @Binding var isCalendarExpanded: Bool
-    @Binding var isInboxExpanded: Bool
-
-    var onShowDay: (CalendarDay) -> Void
-    var onAddTask: (String) -> Void
-
-    @Binding var filterOpen: Bool
-    @Binding var filterStarted: Bool
-    @Binding var filterDone: Bool
-
-    var showUndo: (_ msg: String, _ undo: @escaping () -> Void) -> Void
-
-    @State private var newTaskText = ""
-
-    var body: some View {
-        VStack(spacing: 12) {
-            SectionCard(title: "Daily Calendar",
-                        isExpanded: $isCalendarExpanded,
-                        trailing: { calendarControls }) {
-                if isCalendarExpanded { calendarPanel }
-            }
-
-            SectionCard(title: "Task List",
-                        isExpanded: $isInboxExpanded,
-                        trailing: { InboxHeaderControls(state: state) }) {
-                if isInboxExpanded { inboxPanel }
-            }
-
-            if state.isBulkSelectActiveInbox, !state.selectedInboxTaskIds.isEmpty {
-                BulkBar(selectedCount: state.selectedInboxTaskIds.count,
-                        onArchive: {
-                            state.snapshotForUndo()
-                            state.archiveSelectedInbox()
-                            showUndo("Tasks archived") { state.undoToLastSnapshot() }
-                        },
-                        onDelete: {
-                            state.snapshotForUndo()
-                            state.deleteSelectedInbox()
-                            showUndo("Tasks deleted") { state.undoToLastSnapshot() }
-                        })
-                .transition(.move(edge: .bottom))
-            }
-        }
-    }
-
-    // MARK: Calendar controls (icon only)
-    private var calendarControls: some View {
+    private var inputRow: some View {
         HStack(spacing: 8) {
-            Button {
-                withAnimation {
-                    state.calendarStartDate = Calendar.current.date(byAdding: .day, value: -3, to: Date()) ?? Date()
-                }
-            } label: { Image(systemName: "calendar") }
-            .buttonStyle(.bordered)
-
-            Menu {
-                Toggle("Open", isOn: Binding(
-                    get: { filterOpen },
-                    set: { v in filterOpen = v; state.calendarFilters[.notStarted] = v }
-                ))
-                Toggle("Started", isOn: Binding(
-                    get: { filterStarted },
-                    set: { v in filterStarted = v; state.calendarFilters[.started] = v }
-                ))
-                Toggle("Done", isOn: Binding(
-                    get: { filterDone },
-                    set: { v in filterDone = v; state.calendarFilters[.completed] = v }
-                ))
-            } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
-            .buttonStyle(.bordered)
-
-            Button {
-                withAnimation {
-                    state.calendarViewMode = (state.calendarViewMode == .card ? .list : .card)
-                }
-            } label: { Image(systemName: state.calendarViewMode == .card ? "square.grid.2x2" : "list.bullet") }
-            .buttonStyle(.bordered)
-        }
-    }
-
-    // MARK: Calendar
-    private var calendarPanel: some View {
-        let days = state.calendarDays()
-        let expanded = state.visibleCalendarTasks(for: days)
-        let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
-
-        return Group {
-            if state.calendarViewMode == .card {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(days) { day in
-                            let list = (tasksByDay[day.dateString] ?? [])
-                                .filter { state.calendarFilters[$0.status] ?? true }
-                            DayCard(day: day, tasks: list) { onShowDay(day) }
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-                .frame(height: 170)
-            } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(days) { day in
-                            let list = (tasksByDay[day.dateString] ?? [])
-                                .filter { state.calendarFilters[$0.status] ?? true }
-                            if state.searchQuery.isEmpty && list.isEmpty {
-                                EmptyView()
-                            } else {
-                                DayRow(day: day, tasks: list) { onShowDay(day) }
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .frame(minHeight: 200, maxHeight: 260)
-            }
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.05), radius: 6, x: 0, y: 2)
-        )
-    }
-
-    // MARK: Inbox
-    private var inboxPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                TextField("Add a new task…", text: $newTaskText, onCommit: {
-                    onAddTask(newTaskText); newTaskText = ""
-                })
+            TextField("Add a new task…", text: $newTaskText, onCommit: addTask)
                 .textFieldStyle(.roundedBorder)
-                Button {
-                    onAddTask(newTaskText); newTaskText = ""
-                } label: { Image(systemName: "plus") }
-                .buttonStyle(.borderedProminent)
+            Button(action: addTask) {
+                Image(systemName: "plus")
             }
+            .buttonStyle(.borderedProminent)
+        }
+    }
 
+    private var listArea: some View {
+        Group {
             if state.unassignedTasks.isEmpty {
                 CompatEmptyState(title: "No unassigned tasks", systemImage: "tray")
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
+                List {
                     ForEach(state.unassignedTasks) { t in
-                        InboxRow(
-                            t: t,
-                            isSelecting: state.isBulkSelectActiveInbox,
-                            isChecked: state.selectedInboxTaskIds.contains(t.id),
-                            onToggleCheck: {
-                                if state.selectedInboxTaskIds.contains(t.id) {
-                                    state.selectedInboxTaskIds.remove(t.id)
-                                } else {
-                                    state.selectedInboxTaskIds.insert(t.id)
-                                }
-                            },
-                            onMoreAction: { action in
-                                switch action {
-                                case .delete:
-                                    state.snapshotForUndo()
-                                    state.deleteToTrash(t)
-                                    showUndo("Task deleted") { state.undoToLastSnapshot() }
-                                case .duplicate:
-                                    state.snapshotForUndo()
-                                    state.duplicate(t)
-                                    showUndo("Task duplicated") { state.undoToLastSnapshot() }
-                                case .archive:
-                                    state.snapshotForUndo()
-                                    state.archiveTask(t)
-                                    showUndo("Task archived") { state.undoToLastSnapshot() }
-                                case .edit:
-                                    // Hook your edit sheet if desired
-                                    break
-                                case .moveToInbox:
-                                    // already inbox
-                                    break
-                                }
-                            },
-                            onRate: { r in state.rate(t, rating: r, instanceDate: nil) },
-                            onSetRecurrence: { rec in state.updateRecurrence(t, to: rec) }
-                        )
+                        inboxRow(t)
+                            .onDrag { NSItemProvider(object: NSString(string: "\(t.id)")) }
+                            .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
+                                handleInboxDrop(on: t, providers: providers)
+                            })
                     }
                 }
-                .padding(.vertical, 4)
+                .listStyle(.inset)
+                .frame(minHeight: 140, maxHeight: 300)
             }
         }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.05), radius: 6, x: 0, y: 2)
-        )
-    }
-}
-
-// MARK: - Section Card
-private struct SectionCard<Content: View, Trailing: View>: View {
-    let title: String
-    @Binding var isExpanded: Bool
-    let trailing: () -> Trailing
-    let content: () -> Content
-
-    init(title: String,
-         isExpanded: Binding<Bool>,
-         trailing: @escaping () -> Trailing,
-         @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
-        self._isExpanded = isExpanded
-        self.trailing = trailing
-        self.content = content
     }
 
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack {
+    @ViewBuilder private func inboxRow(_ t: TaskItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            if state.isBulkSelectActiveInbox {
                 Button {
-                    withAnimation { isExpanded.toggle() }
+                    if state.selectedInboxTaskIds.contains(t.id) { state.selectedInboxTaskIds.remove(t.id) }
+                    else { state.selectedInboxTaskIds.insert(t.id) }
                 } label: {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.subheadline)
+                    Image(systemName: state.selectedInboxTaskIds.contains(t.id) ? "checkmark.square" : "square")
                 }
-                .buttonStyle(.plain)
-
-                Text(title).font(.title3.bold())
-                Spacer()
-                trailing()
             }
-            content()
+
+            // Match look with day modal: bold title, recurrence & rating icons
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(t.text).font(.body).bold()
+                    if t.isRecurring { Image(systemName: "repeat").foregroundStyle(.secondary) }
+                    // Thumb rating (cycle neutral -> like -> dislike)
+                    Button {
+                        let ds = t.date ?? ISO8601.dateOnly.string(from: Date())
+                        let current = state.tasks.first(where: { $0.id == t.id })?.completedOverrides?[ds]?.rating
+                        let next: TaskRating? = (current == nil) ? .liked : (current == .liked ? .disliked : nil)
+                        onAboutToMutate()
+                        state.rate(t, rating: next, instanceDate: ds)
+                        triggerUndoSnack("Rated")
+                    } label: {
+                        let ds = t.date ?? ISO8601.dateOnly.string(from: Date())
+                        let current = state.tasks.first(where: { $0.id == t.id })?.completedOverrides?[ds]?.rating
+                        Image(systemName:
+                                (current == .liked ? "hand.thumbsup.fill" :
+                                    (current == .disliked ? "hand.thumbsdown.fill" : "hand.raised"))
+                        )
+                        .foregroundStyle(current == .liked ? .green : (current == .disliked ? .red : .secondary))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Scheduled date under name (if any)
+                if let ds = t.date, !ds.isEmpty {
+                    Text("Scheduled: \(ds)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // Three-dot menu
+            Menu {
+                Button { beginEdit(t) } label: { Label("Edit", systemImage: "pencil") }
+                Button { onAboutToMutate(); state.archiveTask(t); triggerUndoSnack("Archived") } label: { Label("Archive", systemImage: "archivebox") }
+                Button { onAboutToMutate(); state.duplicate(t); triggerUndoSnack("Duplicated") } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                Button(role: .destructive) { onAboutToMutate(); state.deleteToTrash(t); triggerUndoSnack("Deleted") } label: { Label("Delete", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis.circle").imageScale(.large).padding(4)
+            }
+            .menuStyle(.borderlessButton)
         }
+        .contentShape(Rectangle())
+    }
+
+    private func addTask() {
+        guard !newTaskText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        onAboutToMutate()
+        state.addTask(text: newTaskText)
+        triggerUndoSnack("Added")
+        newTaskText = ""
+    }
+
+    private func beginEdit(_ t: TaskItem) {
+        editingTaskId = t.id
+        editText = t.text
+        editNotes = t.notes ?? ""
+        editDate = t.date ?? ""
+        editStatus = t.status
+        editRecurrence = t.recurrence ?? .never
+        let meta = state.taskMeta[t.id] ?? .init()
+        createdBy = meta.createdBy
+        assignedTo = meta.assignedTo
+        showEditSheet = true
+    }
+
+    private func handleInboxDrop(on target: TaskItem, providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
+            guard
+                let d = data as? Data,
+                let idStr = String(data: d, encoding: .utf8),
+                let draggedId = Int(idStr),
+                let fromIndex = state.tasks.firstIndex(where: { $0.id == draggedId }),
+                let toIndex = state.tasks.firstIndex(where: { $0.id == target.id })
+            else { return }
+            DispatchQueue.main.async {
+                guard state.tasks[fromIndex].date == nil, state.tasks[toIndex].date == nil else { return }
+                onAboutToMutate()
+                let item = state.tasks.remove(at: fromIndex)
+                state.tasks.insert(item, at: toIndex)
+                triggerUndoSnack("Reordered")
+            }
+        }
+        return true
     }
 }
 
-// MARK: - Small bottom bar icon
-private struct BarIcon: View {
-    let system: String
-    let isActive: Bool
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: system)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .padding(.vertical, 8)
-    }
-}
-
-// MARK: - Calendar Day card / row
+// MARK: - Day card & row
 private struct DayCard: View {
     let day: CalendarDay
     let tasks: [TaskItem]
+    var bg: Color
     var onTap: () -> Void
 
     var body: some View {
@@ -419,7 +723,7 @@ private struct DayCard: View {
 
         VStack(alignment: .leading, spacing: 6) {
             Text(day.dayName).font(.caption).foregroundStyle(isToday ? .blue : .secondary)
-            Text("\(day.dayOfMonth)").font(.title2).fontWeight(.semibold)
+            Text("\(day.dayOfMonth)").font(.title3).fontWeight(.semibold)
                 .foregroundStyle(isToday ? .blue : .primary)
             Spacer()
             VStack(alignment: .leading, spacing: 4) {
@@ -429,15 +733,14 @@ private struct DayCard: View {
             }
         }
         .padding(10)
-        .frame(width: 112, height: 150)
+        .frame(width: 110, height: 140)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white)
+                .fill(bg)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(isToday ? .blue : Color.gray.opacity(0.2), lineWidth: isToday ? 2 : 1)
+                        .stroke(isToday ? .blue : .clear, lineWidth: 2)
                 )
-                .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 1)
         )
         .onTapGesture { onTap() }
     }
@@ -445,7 +748,7 @@ private struct DayCard: View {
     @ViewBuilder private func badge(_ text: String, _ color: Color) -> some View {
         Text(text).font(.caption2).bold()
             .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(color.opacity(0.15))
+            .background(color.opacity(0.18))
             .foregroundStyle(color).clipShape(Capsule())
     }
 }
@@ -453,6 +756,7 @@ private struct DayCard: View {
 private struct DayRow: View {
     let day: CalendarDay
     let tasks: [TaskItem]
+    var bg: Color
     var onTap: () -> Void
 
     var body: some View {
@@ -475,9 +779,8 @@ private struct DayRow: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(isToday ? .blue : Color.gray.opacity(0.2)))
-                .shadow(color: .black.opacity(0.04), radius: 2, x: 0, y: 1)
+                .fill(bg)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(isToday ? .blue : .clear))
         )
         .onTapGesture { onTap() }
     }
@@ -493,300 +796,187 @@ private struct DayRow: View {
     @ViewBuilder private func chip(_ text: String, _ color: Color) -> some View {
         Text(text).font(.caption2).bold()
             .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(color.opacity(0.15))
+            .background(color.opacity(0.18))
             .foregroundStyle(color).clipShape(Capsule())
     }
 }
 
-// MARK: - Inbox Row
-private enum InboxRowAction { case delete, duplicate, archive, edit, moveToInbox }
-
-private struct InboxRow: View {
-    let t: TaskItem
-    let isSelecting: Bool
-    let isChecked: Bool
-    let onToggleCheck: () -> Void
-    let onMoreAction: (InboxRowAction) -> Void
-    let onRate: (TaskRating?) -> Void
-    let onSetRecurrence: (Recurrence) -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if isSelecting {
-                Button(action: onToggleCheck) {
-                    Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(t.text).font(.body.weight(.semibold))
-                    if t.isRecurring {
-                        Image(systemName: "repeat").foregroundStyle(.secondary).imageScale(.small)
-                    }
-                    Spacer()
-                    Menu {
-                        Button("Edit") { onMoreAction(.edit) }
-                        Button("Duplicate") { onMoreAction(.duplicate) }
-                        Button("Archive") { onMoreAction(.archive) }
-                        Button(role: .destructive) { onMoreAction(.delete) } label: { Text("Delete") }
-                    } label: { Image(systemName: "ellipsis.circle").imageScale(.large) }
-                }
-
-                if let ds = t.date, !ds.isEmpty {
-                    Text("Scheduled for \(ds)").font(.caption).foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 10) {
-                    Menu {
-                        Button("Never")   { onSetRecurrence(.never) }
-                        Button("Daily")   { onSetRecurrence(.daily) }
-                        Button("Weekly")  { onSetRecurrence(.weekly) }
-                        Button("Monthly") { onSetRecurrence(.monthly) }
-                    } label: { Image(systemName: "repeat") }
-
-                    Button {
-                        let current = t.completedOverrides?[t.date ?? ""]?.rating
-                        let next: TaskRating? = {
-                            switch current {
-                            case nil: return .liked
-                            case .liked: return .disliked
-                            case .disliked: return nil
-                            }
-                        }()
-                        onRate(next)
-                    } label: {
-                        let r = t.completedOverrides?[t.date ?? ""]?.rating
-                        Image(systemName:
-                                r == .liked ? "hand.thumbsup.fill" :
-                                r == .disliked ? "hand.thumbsdown.fill" :
-                                "hand.thumbsup")
-                    }
-                }
-                .tint(.primary.opacity(0.85))
-            }
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.2)))
-        )
-    }
-}
-
 // MARK: - Day Modal
-private enum DayActionKind { case archive, delete, duplicate, moveToInbox, reschedule }
-
 private struct DayModalView: View {
     let day: CalendarDay
     @ObservedObject var state: AppState
-    var onAction: (DayActionKind, TaskItem) -> Void
+    @Binding var isBulk: Bool
+    @Binding var selectedIds: Set<Int>
 
-    @State private var isSelecting = false
-    @State private var selectedIds = Set<Int>()
+    // Undo hooks
+    var onAboutToMutate: () -> Void
+    var triggerUndoSnack: (_ actionText: String) -> Void
 
     var body: some View {
-        let expanded = state.visibleCalendarTasks(for: [day])
+        let days = [day]
+        let expanded = state.visibleCalendarTasks(for: days)
         VStack(alignment: .leading, spacing: 12) {
-            header(expanded: expanded)
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(day.dayName).font(.title2).bold()
+                    Text(dateLong(day.dateString)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(isBulk ? "Cancel" : "Select") { isBulk.toggle(); selectedIds = [] }
+            }
+
             if expanded.isEmpty {
                 CompatEmptyState(title: "No tasks for this day", systemImage: "calendar")
             } else {
-                ScrollView { tasksList(expanded: expanded) }
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(expanded) { t in taskRow(t) }
+                    }
+                }
             }
-            if isSelecting, !selectedIds.isEmpty { bulkBar(expanded: expanded) }
+
+            if isBulk, !selectedIds.isEmpty {
+                HStack {
+                    Text("\(selectedIds.count) selected").font(.subheadline).bold()
+                    Spacer()
+                    Menu("Actions") {
+                        Button { bulkMoveToInbox(expanded: expanded) } label: { Label("Move to Inbox", systemImage: "tray") }
+                        Button { bulkArchive(expanded: expanded) } label: { Label("Archive", systemImage: "archivebox") }
+                        Button("Delete", role: .destructive) {
+                            bulkDelete(expanded: expanded)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.top, 6)
+            }
         }
         .padding()
     }
 
-    @ViewBuilder private func header(expanded: [TaskItem]) -> some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text(day.dayName).font(.title2).bold()
-                Text(dateLong(day.dateString)).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(isSelecting ? "Cancel" : "Select") {
-                withAnimation { isSelecting.toggle(); selectedIds.removeAll() }
-            }
-        }
-    }
-
-    @ViewBuilder private func tasksList(expanded: [TaskItem]) -> some View {
-        VStack(spacing: 8) {
-            ForEach(expanded) { t in
-                TaskLine(
-                    t: t,
-                    dayString: day.dateString,
-                    isSelecting: isSelecting,
-                    isChecked: selectedIds.contains(t.id),
-                    onToggleCheck: {
+    @ViewBuilder private func taskRow(_ t: TaskItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if isBulk {
+                    Button {
                         if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                    },
-                    onStatus: { s in state.updateStatus(t, to: s, instanceDate: day.dateString) },
-                    onSetRecurrence: { r in state.updateRecurrence(t, to: r) },
-                    onRate: {
-                        let current = t.completedOverrides?[day.dateString]?.rating
-                        let next: TaskRating? = {
-                            switch current {
-                            case nil: return .liked
-                            case .liked: return .disliked
-                            case .disliked: return nil
-                            }
-                        }()
-                        state.rate(t, rating: next, instanceDate: day.dateString)
-                    },
-                    onMore: { action in
-                        state.snapshotForUndo()
-                        switch action {
-                        case .archive:
-                            state.archiveTask(t); onAction(.archive, t)
-                        case .duplicate:
-                            state.duplicate(t); onAction(.duplicate, t)
-                        case .moveToInbox:
-                            state.moveToInbox(t); onAction(.moveToInbox, t)
-                        case .delete:
-                            state.deleteToTrash(t); onAction(.delete, t)
-                        case .edit:
-                            break
-                        }
+                    } label: {
+                        Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square")
                     }
-                )
+                }
+                Text(t.text).font(.body).bold()
+                if t.isRecurring { Image(systemName: "repeat") }
+                Spacer()
+
+                // Repeat (icon only)
+                Menu {
+                    Button("Never") { state.updateRecurrence(t, to: .never) }
+                    Button("Daily") { state.updateRecurrence(t, to: .daily) }
+                    Button("Weekly") { state.updateRecurrence(t, to: .weekly) }
+                    Button("Monthly") { state.updateRecurrence(t, to: .monthly) }
+                } label: { Image(systemName: "repeat") }
+
+                // Thumb rating button cycling states
+                Button {
+                    let current = t.completedOverrides?[day.dateString]?.rating
+                    let next: TaskRating? = (current == nil) ? .liked : (current == .liked ? .disliked : nil)
+                    onAboutToMutate()
+                    state.rate(t, rating: next, instanceDate: day.dateString)
+                    triggerUndoSnack("Rated")
+                } label: {
+                    let r = t.completedOverrides?[day.dateString]?.rating
+                    Image(systemName:
+                            (r == .liked ? "hand.thumbsup.fill" :
+                                (r == .disliked ? "hand.thumbsdown.fill" : "hand.raised"))
+                    )
+                    .foregroundStyle(r == .liked ? .green : (r == .disliked ? .red : .secondary))
+                }
+                .buttonStyle(.plain)
+
+                // Three-dot actions (with Edit)
+                Menu {
+                    Button { onAboutToMutate(); state.moveToInbox(t); triggerUndoSnack("Moved to Inbox") } label: { Label("Move to Inbox", systemImage: "tray") }
+                    Button { onAboutToMutate(); state.duplicate(t); triggerUndoSnack("Duplicated") } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                    Button { onAboutToMutate(); state.archiveTask(t); triggerUndoSnack("Archived") } label: { Label("Archive", systemImage: "archivebox") }
+                    Button(role: .destructive) { onAboutToMutate(); state.deleteToTrash(t); triggerUndoSnack("Deleted") } label: { Label("Delete", systemImage: "trash") }
+                } label: { Image(systemName: "ellipsis.circle") }
             }
+
+            if let n = t.notes, !n.isEmpty {
+                Text(n).font(.subheadline).foregroundStyle(.secondary)
+            }
+
+            // Status buttons with colored tints
+            HStack(spacing: 8) {
+                Button("Open") {
+                    onAboutToMutate()
+                    state.updateStatus(t, to: .notStarted, instanceDate: day.dateString)
+                    triggerUndoSnack("Marked Open")
+                }
+                .buttonStyle(.bordered).tint(t.status == .notStarted ? .blue : .secondary)
+
+                Button("Started") {
+                    onAboutToMutate()
+                    state.updateStatus(t, to: .started, instanceDate: day.dateString)
+                    triggerUndoSnack("Marked Started")
+                }
+                .buttonStyle(.bordered).tint(t.status == .started ? .orange : .secondary)
+
+                Button("Done") {
+                    onAboutToMutate()
+                    state.updateStatus(t, to: .completed, instanceDate: day.dateString)
+                    triggerUndoSnack("Marked Done")
+                }
+                .buttonStyle(.bordered).tint(t.status == .completed ? .green : .secondary)
+            }
+            .font(.caption)
         }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemBackground)))
     }
 
-    @ViewBuilder private func bulkBar(expanded: [TaskItem]) -> some View {
-        HStack {
-            Text("\(selectedIds.count) selected").font(.subheadline).bold()
-            Spacer()
-            Button {
-                state.snapshotForUndo()
-                for t in expanded where selectedIds.contains(t.id) { state.moveToInbox(t) }
-                selectedIds.removeAll(); isSelecting = false
-                if let first = expanded.first { onAction(.moveToInbox, first) }
-            } label: { Label("Move to Inbox", systemImage: "tray") }
-
-            Button {
-                state.snapshotForUndo()
-                for t in expanded where selectedIds.contains(t.id) { state.archiveTask(t) }
-                selectedIds.removeAll(); isSelecting = false
-                if let first = expanded.first { onAction(.archive, first) }
-            } label: { Label("Archive", systemImage: "archivebox") }
-            .buttonStyle(.borderedProminent)
-
-            Button(role: .destructive) {
-                state.snapshotForUndo()
-                for t in expanded where selectedIds.contains(t.id) { state.deleteToTrash(t) }
-                selectedIds.removeAll(); isSelecting = false
-                if let first = expanded.first { onAction(.delete, first) }
-            } label: { Label("Delete", systemImage: "trash") }
-        }
-        .padding(.top, 6)
+    private func bulkArchive(expanded: [TaskItem]) {
+        let ids = selectedIds
+        onAboutToMutate()
+        for t in expanded where ids.contains(t.id) { state.archiveTask(t) }
+        selectedIds = []; isBulk = false
+        triggerUndoSnack("Archived")
+    }
+    private func bulkDelete(expanded: [TaskItem]) {
+        let ids = selectedIds
+        onAboutToMutate()
+        for t in expanded where ids.contains(t.id) { state.deleteToTrash(t) }
+        selectedIds = []; isBulk = false
+        triggerUndoSnack("Deleted")
+    }
+    private func bulkMoveToInbox(expanded: [TaskItem]) {
+        let ids = selectedIds
+        onAboutToMutate()
+        for t in expanded where ids.contains(t.id) { state.moveToInbox(t) }
+        selectedIds = []; isBulk = false
+        triggerUndoSnack("Moved to Inbox")
     }
 
     private func dateLong(_ ds: String) -> String {
         guard let d = ds.asISODateOnlyUTC else { return ds }
-        let f = DateFormatter()
-        f.timeZone = .init(secondsFromGMT: 0)
-        f.dateFormat = "MMMM d, yyyy"
+        let f = DateFormatter(); f.timeZone = .init(secondsFromGMT: 0); f.dateFormat = "MMMM d, yyyy"
         return f.string(from: d)
     }
 }
 
-private struct TaskLine: View {
-    let t: TaskItem
-    let dayString: String
-    let isSelecting: Bool
-    let isChecked: Bool
-    let onToggleCheck: () -> Void
-    let onStatus: (TaskStatus) -> Void
-    let onSetRecurrence: (Recurrence) -> Void
-    let onRate: () -> Void
-    let onMore: (InboxRowAction) -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            headerRow
-            statusRow
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.2)))
-    }
-
-    private var headerRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if isSelecting {
-                Button(action: onToggleCheck) {
-                    Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(t.text).font(.body.bold())
-                    if t.isRecurring { Image(systemName: "repeat").foregroundStyle(.secondary) }
-                    Spacer()
-
-                    Menu {
-                        Button("Never") { onSetRecurrence(.never) }
-                        Button("Daily") { onSetRecurrence(.daily) }
-                        Button("Weekly") { onSetRecurrence(.weekly) }
-                        Button("Monthly") { onSetRecurrence(.monthly) }
-                    } label: { Image(systemName: "repeat") }
-
-                    Button(action: onRate) {
-                        let r = t.completedOverrides?[dayString]?.rating
-                        Image(systemName:
-                                r == .liked ? "hand.thumbsup.fill" :
-                                r == .disliked ? "hand.thumbsdown.fill" :
-                                "hand.thumbsup")
-                    }
-
-                    Menu {
-                        Button("Edit") { onMore(.edit) }
-                        Button("Duplicate") { onMore(.duplicate) }
-                        Button("Archive") { onMore(.archive) }
-                        Button("Move to Inbox") { onMore(.moveToInbox) }
-                        Button(role: .destructive) { onMore(.delete) } label: { Text("Delete") }
-                    } label: { Image(systemName: "ellipsis.circle").imageScale(.large) }
-                }
-            }
-        }
-    }
-
-    private var statusRow: some View {
-        HStack(spacing: 6) {
-            Button("Open") { onStatus(.notStarted) }
-                .buttonStyle(.bordered)
-                .tint(t.status == .notStarted ? .blue : .gray.opacity(0.5))
-                .font(.caption)
-
-            Button("Started") { onStatus(.started) }
-                .buttonStyle(.bordered)
-                .tint(t.status == .started ? .orange : .gray.opacity(0.5))
-                .font(.caption)
-
-            Button("Done") { onStatus(.completed) }
-                .buttonStyle(.bordered)
-                .tint(t.status == .completed ? .green : .gray.opacity(0.5))
-                .font(.caption)
-        }
-    }
-}
-
 // MARK: - Archives
-private struct ArchivesScreen: View {
+private struct ArchivesView: View {
     @ObservedObject var state: AppState
+    @State private var isSelecting = false
+    @State private var selectedIds: Set<Int> = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Archives").font(.title2).bold()
+            HStack {
+                Text("Archives").font(.title2).bold()
+                Spacer()
+                Button(isSelecting ? "Cancel" : "Select") { isSelecting.toggle(); selectedIds.removeAll() }
+            }
 
             Picker("Section", selection: $state.activeArchiveTab) {
                 ForEach(ArchiveTab.allCases) { tab in
@@ -795,11 +985,23 @@ private struct ArchivesScreen: View {
             }
             .pickerStyle(.segmented)
 
-            HStack {
-                Spacer()
-                Button(role: .destructive) {
-                    state.emptyArchive(reason: state.activeArchiveTab)
-                } label: { Label("Empty \(label(state.activeArchiveTab))", systemImage: "trash") }
+            if isSelecting && !selectedIds.isEmpty {
+                HStack {
+                    Text("\(selectedIds.count) selected").font(.subheadline).bold()
+                    Spacer()
+                    Menu("Actions") {
+                        Button("Restore") {
+                            let toRestore = state.archivedTasks.filter { selectedIds.contains($0.id) }
+                            for a in toRestore { state.restoreTask(a) }
+                            selectedIds.removeAll(); isSelecting = false
+                        }
+                        Button("Delete Permanently", role: .destructive) {
+                            for id in selectedIds { state.deletePermanently(id) }
+                            selectedIds.removeAll(); isSelecting = false
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
 
             let list = state.archivedTasks.filter { $0.archiveReason == state.activeArchiveTab.rawValue }
@@ -809,7 +1011,14 @@ private struct ArchivesScreen: View {
             } else {
                 List {
                     ForEach(list) { t in
-                        HStack {
+                        HStack(spacing: 8) {
+                            if isSelecting {
+                                Button {
+                                    if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
+                                } label: {
+                                    Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square")
+                                }
+                            }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(t.text).font(.body)
                                     .strikethrough(t.archiveReason == "completed")
@@ -817,11 +1026,13 @@ private struct ArchivesScreen: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            HStack(spacing: 8) {
-                                Button { state.restoreTask(t) } label: { Label("Restore", systemImage: "arrow.uturn.left") }
-                                Button(role: .destructive) { state.deletePermanently(t.id) } label: { Image(systemName: "trash") }
+                            if !isSelecting {
+                                Menu {
+                                    Button { state.restoreTask(t) } label: { Label("Restore", systemImage: "arrow.uturn.left") }
+                                    Button(role: .destructive) { state.deletePermanently(t.id) } label: { Label("Delete", systemImage: "trash") }
+                                } label: { Image(systemName: "ellipsis.circle") }
+                                .menuStyle(.borderlessButton)
                             }
-                            .buttonStyle(.borderless)
                         }
                     }
                 }
@@ -829,6 +1040,7 @@ private struct ArchivesScreen: View {
             }
         }
         .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func label(_ tab: ArchiveTab) -> String {
@@ -842,23 +1054,55 @@ private struct ArchivesScreen: View {
 }
 
 // MARK: - Stats
-private struct StatsScreen: View {
+private struct StatsView: View {
     @ObservedObject var state: AppState
+    @Binding var period: ContentView.Period
+    @Binding var customStart: Date
+    @Binding var customEnd: Date
+
+    private func periodRange() -> ClosedRange<Date> {
+        let cal = Calendar.current; let now = Date()
+        switch period {
+        case .weekly:    return (cal.date(byAdding: .day, value: -7, to: now) ?? now)...now
+        case .monthly:   return (cal.date(byAdding: .month, value: -1, to: now) ?? now)...now
+        case .quarterly: return (cal.date(byAdding: .month, value: -3, to: now) ?? now)...now
+        case .semester:  return (cal.date(byAdding: .month, value: -6, to: now) ?? now)...now
+        case .yearly:    return (cal.date(byAdding: .year, value: -1, to: now) ?? now)...now
+        case .custom:    return min(customStart, customEnd)...max(customStart, customEnd)
+        }
+    }
+
     var body: some View {
+        let range = periodRange()
         let (series, _) = state.weeklySeries(lastWeeks: 8)
-        let counts = (
-            completed: series.reduce(0) { $0 + $1.completed },
-            started: series.reduce(0) { $0 + $1.open } - 0,
-            open: series.reduce(0) { $0 + $1.open },
-            total: series.reduce(0) { $0 + $1.completed + $1.open }
-        )
 
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Stats").font(.title2).bold()
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Stats").font(.title2).bold()
+                Spacer()
+                Menu {
+                    Picker("Period", selection: $period) {
+                        ForEach(ContentView.Period.allCases, id: \.self) { p in
+                            Text(p.rawValue.capitalized).tag(p)
+                        }
+                    }
+                    if period == .custom {
+                        Divider()
+                        DatePicker("From", selection: $customStart, displayedComponents: .date)
+                        DatePicker("To", selection: $customEnd, displayedComponents: .date)
+                    }
+                } label: {
+                    Label("Period", systemImage: "calendar")
+                }
+                .buttonStyle(.bordered)
+            }
 
+            // KPI bars (Completed / Started / Open / Total)
+            let counts = aggregateCounts(in: range)
             KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
 
-            GroupBox("Last 8 weeks") {
+            // Bar chart (rolling 8 weeks)
+            GroupBox("Last 8 weeks (trend)") {
                 if #available(iOS 16.0, *) {
                     Chart {
                         ForEach(series, id: \.label) { w in
@@ -872,223 +1116,263 @@ private struct StatsScreen: View {
                     Text("Charts requires iOS 16+.").frame(height: 60)
                 }
             }
-        }
-        .padding()
-    }
-}
 
-// MARK: - Settings
-private struct SettingsScreen: View {
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack { Spacer(minLength: 0) }
-                        .frame(width: 56, height: 56)
-                        .background(Circle().fill(Color.gray.opacity(0.2)))
-                        .overlay(Image(systemName: "person.fill").foregroundStyle(.secondary))
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Adrian Kisliuk").font(.headline)
-                        Text("a.kisliuk@gmail.com").font(.subheadline).foregroundStyle(.secondary)
+            // Completed tasks in period
+            GroupBox("Completed Tasks in Period") {
+                let completed = completedTasks(in: range)
+                if completed.isEmpty {
+                    Text("No completed tasks in this period.").foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(completed, id: \.id) { t in
+                            HStack {
+                                Text(t.text).font(.subheadline)
+                                Spacer()
+                                Text(t.date ?? "").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    Spacer()
                 }
+            }
 
-                Divider()
-
-                List {
-                    NavigationLink("Manage Teams") { PlaceholderSettingsDetail(title: "Manage Teams") }
-                    NavigationLink("Subscription") { PlaceholderSettingsDetail(title: "Subscription") }
-                    NavigationLink("Billing") { PlaceholderSettingsDetail(title: "Billing") }
-                    NavigationLink("Languages") { PlaceholderSettingsDetail(title: "Languages") }
-                    NavigationLink("Privacy Policy") { PlaceholderSettingsDetail(title: "Privacy Policy") }
-                    NavigationLink("Terms of Use") { PlaceholderSettingsDetail(title: "Terms of Use") }
-                    NavigationLink("Theme") { ThemeSettingsView() }
-                    Button("Log in/out") { }
+            // Ratings breakdown (Open, Done, Deleted)
+            GroupBox("Ratings in Period") {
+                let ratings = ratingsIn(range)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Text("Open").frame(width: 80, alignment: .leading); Text("👍 \(ratings.openLiked)"); Text("👎 \(ratings.openDisliked)") }
+                    HStack { Text("Done").frame(width: 80, alignment: .leading); Text("👍 \(ratings.doneLiked)"); Text("👎 \(ratings.doneDisliked)") }
+                    HStack { Text("Deleted").frame(width: 80, alignment: .leading); Text("👍 \(ratings.deletedLiked)"); Text("👎 \(ratings.deletedDisliked)") }
                 }
-                .listStyle(.insetGrouped)
-
-                Spacer()
+                .font(.subheadline)
             }
-            .padding()
-            .navigationTitle("Settings")
-        }
-    }
-}
-
-private struct PlaceholderSettingsDetail: View {
-    let title: String
-    var body: some View {
-        VStack { Text(title).font(.title2).bold(); Spacer() }
-            .padding()
-    }
-}
-
-private struct ThemeSettingsView: View {
-    @State private var chosen: String = "System Mode"
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("Theme", selection: $chosen) {
-                Text("Dark").tag("Dark")
-                Text("Light").tag("Light")
-                Text("System Mode").tag("System Mode")
-            }
-            .pickerStyle(.inline)
-
-            Text("Selecting Dark or Light will apply immediately. System Mode follows device settings.")
-                .font(.footnote).foregroundStyle(.secondary)
-            Spacer()
         }
         .padding()
-        .navigationTitle("Theme")
-        .onChange(of: chosen) { _, _ in } // iOS 17 signature
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
-}
 
-// MARK: - Small helpers
-
-private struct CameraPlaceholder: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "camera").font(.system(size: 48, weight: .regular))
-            Text("Camera").font(.headline).foregroundStyle(.secondary)
+    // KPI helpers
+    private func aggregateCounts(in range: ClosedRange<Date>) -> (completed: Int, started: Int, open: Int, total: Int) {
+        func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
+        var open = 0, started = 0, done = 0
+        for t in state.tasks where within(t.date) {
+            switch t.status { case .notStarted: open += 1; case .started: started += 1; case .completed: done += 1 }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
-    }
-}
-
-private struct InboxHeaderControls: View {
-    @ObservedObject var state: AppState
-    var body: some View {
-        HStack(spacing: 8) {
-            Button(state.isBulkSelectActiveInbox ? "Cancel" : "Select") {
-                withAnimation { state.toggleBulkSelectInbox() }
+        for a in state.archivedTasks where within(a.date) {
+            switch a.archiveReason {
+            case "completed": done += 1
+            case "started": started += 1
+            case "not_started": open += 1
+            default: break
             }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Toggle bulk select")
         }
+        let total = open + started + done
+        return (done, started, open, total)
+    }
+
+    private func completedTasks(in range: ClosedRange<Date>) -> [TaskItem] {
+        let live = state.tasks.filter { $0.status == .completed && $0.date?.asISODateOnlyUTC.map(range.contains) == true }
+        let archived = state.archivedTasks
+            .filter { $0.archiveReason == "completed" && $0.date?.asISODateOnlyUTC.map(range.contains) == true }
+            .map { a in TaskItem(id: a.id, text: a.text, notes: a.notes, date: a.date, status: .completed, recurrence: nil, createdAt: a.createdAt, startedAt: a.startedAt, completedAt: a.completedAt, completedOverrides: nil) }
+        return live + archived
+    }
+
+    private func ratingsIn(_ range: ClosedRange<Date>) -> (openLiked: Int, openDisliked: Int, doneLiked: Int, doneDisliked: Int, deletedLiked: Int, deletedDisliked: Int) {
+        func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
+        var oL = 0, oD = 0, dL = 0, dD = 0, delL = 0, delD = 0
+
+        for t in state.tasks where within(t.date) {
+            let rating = t.completedOverrides?[t.date ?? ""]?.rating
+            switch t.status {
+                case .notStarted, .started:
+                    if rating == .liked { oL += 1 }
+                    if rating == .disliked { oD += 1 }
+                case .completed:
+                    if rating == .liked { dL += 1 }
+                    if rating == .disliked { dD += 1 }
+            }
+        }
+        // Archived "deleted" items currently don’t carry ratings; left at 0.
+        return (oL, oD, dL, dD, delL, delD)
     }
 }
 
+// KPI bars component (progress bars instead of %)
 private struct KPIBars: View {
     let completed: Int
     let started: Int
     let open: Int
     let total: Int
 
-    private var safeTotal: CGFloat {
-        let s = completed + started + open
-        return CGFloat(max(total, s, 1))
+    var body: some View {
+        VStack(spacing: 10) {
+            barRow(title: "Completed", value: completed, tint: .green)
+            barRow(title: "Started", value: started, tint: .orange)
+            barRow(title: "Open", value: open, tint: .blue)
+            barRow(title: "Total", value: total, tint: .primary)
+        }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GeometryReader { geo in
-                let width = geo.size.width
-                let cW = width * (CGFloat(completed) / safeTotal)
-                let sW = width * (CGFloat(started) / safeTotal)
-                let oW = width * (CGFloat(open) / safeTotal)
-
-                HStack(spacing: 0) {
-                    RoundedRectangle(cornerRadius: 6).fill(Color.green.opacity(completed > 0 ? 0.9 : 0.2)).frame(width: cW, height: 12)
-                    RoundedRectangle(cornerRadius: 0).fill(Color.orange.opacity(started > 0 ? 0.9 : 0.2)).frame(width: sW, height: 12)
-                    RoundedRectangle(cornerRadius: 6).fill(Color.blue.opacity(open > 0 ? 0.9 : 0.2)).frame(width: oW, height: 12)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .frame(height: 14)
-
-            HStack(spacing: 16) {
-                legendDot(color: .green, label: "Completed \(completed)")
-                legendDot(color: .orange, label: "Started \(started)")
-                legendDot(color: .blue, label: "Open \(open)")
+    private func barRow(title: String, value: Int, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Text("Total \(total)").font(.caption).foregroundStyle(.secondary)
+                Text("\(value)").font(.caption).foregroundStyle(.secondary)
+            }
+            ProgressView(value: total > 0 ? Double(value) / Double(total) : 0).tint(tint)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Settings landing (opens sheet)
+private struct SettingsLanding: View {
+    let openSheet: () -> Void
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Settings").font(.title2).bold()
+            Button("Open Settings", action: openSheet)
+                .buttonStyle(.borderedProminent)
+            Spacer()
+        }
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Settings sheet (profile + menu)
+private struct SettingsSheet: View {
+    @Binding var isDarkMode: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Profile header
+            HStack(alignment: .center, spacing: 12) {
+                // Placeholder profile rectangle with initials
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.2))
+                    Text("AK").font(.title2).bold()
+                }
+                .frame(width: 64, height: 64)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Adrian Kisliuk").font(.headline).bold()
+                    Text("a.kisliuk@gmail.com").foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            Toggle(isOn: $isDarkMode) {
+                Label("Theme: Dark / Light", systemImage: "moon.circle")
+            }
+
+            Group {
+                Button("Manage Teams", action: {})
+                Button("Subscription", action: {})
+                Button("Billing", action: {})
+                Button("Languages", action: {})
+                Button("Privacy Policy", action: {})
+                Button("Terms of Use", action: {})
+                Button("Log in/out", action: {})
+            }
+            .buttonStyle(.bordered)
+
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+// MARK: - Edit Task sheet (used from Inbox)
+private struct EditTaskSheet: View {
+    @Binding var title: String
+    @Binding var notes: String
+    @Binding var dateStr: String
+    @Binding var status: TaskStatus
+    @Binding var recurrence: Recurrence
+    @Binding var createdBy: String
+    @Binding var assignedTo: String
+
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Details") {
+                    TextField("Title", text: $title)
+                    TextField("Notes", text: $notes)
+                }
+                Section("Schedule") {
+                    TextField("yyyy-MM-dd", text: $dateStr)
+                    Picker("Status", selection: $status) {
+                        Text("Open").tag(TaskStatus.notStarted)
+                        Text("Started").tag(TaskStatus.started)
+                        Text("Done").tag(TaskStatus.completed)
+                    }
+                    Picker("Repeat", selection: $recurrence) {
+                        Text("Never").tag(Recurrence.never)
+                        Text("Daily").tag(Recurrence.daily)
+                        Text("Weekly").tag(Recurrence.weekly)
+                        Text("Monthly").tag(Recurrence.monthly)
+                    }
+                }
+                Section("People") {
+                    TextField("Created by", text: $createdBy)
+                    TextField("Assigned to", text: $assignedTo)
+                }
+            }
+            .navigationTitle("Edit Task")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: onSave)
+                }
             }
         }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder private func legendDot(color: Color, label: String) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(label).font(.caption)
-        }
     }
 }
 
-private struct SnackbarView: View {
-    let message: String
-    let onUndo: () -> Void
-    let onDismiss: () -> Void
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(message)
-            Spacer()
-            Button("Undo", action: onUndo).buttonStyle(.bordered)
-            Button(action: onDismiss) { Image(systemName: "xmark") }.buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .padding(.horizontal)
-    }
-}
-
-// MARK: - Bulk action bar (Inbox select mode)
-private struct BulkBar: View {
-    let selectedCount: Int
+// MARK: - Bulk action bar (Inbox)
+private struct BulkActionBar: View {
+    let count: Int
     let onArchive: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            Text("\(selectedCount) selected")
-                .font(.subheadline).bold()
+            Text("\(count) selected").font(.subheadline).bold()
             Spacer()
-            Button {
-                onArchive()
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-            .buttonStyle(.bordered)
+            Button("Archive", action: onArchive).buttonStyle(.borderedProminent)
+            Button("Delete", role: .destructive, action: onDelete).buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 2)
-        .padding(.horizontal)
+        .padding(10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
-private struct CompatEmptyState: View {
-    let title: String
-    let systemImage: String
+// MARK: - Camera placeholder (no-op selection)
+private struct CameraPlaceholder: View {
     var body: some View {
-        if #available(iOS 17.0, *) {
-            ContentUnavailableView(title, systemImage: systemImage)
-        } else {
-            VStack(spacing: 12) {
-                Image(systemName: systemImage).font(.system(size: 40)).foregroundColor(.secondary)
-                Text(title).font(.headline).foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 12) {
+            Image(systemName: "camera").imageScale(.large)
+            Text("Camera is a placeholder").foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, minHeight: 140)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding()
     }
 }
 
+// MARK: - Small helpers
 private func formatDateTime(_ d: Date?) -> String {
     guard let d = d else { return "—" }
-    let f = DateFormatter()
-    f.dateStyle = .medium; f.timeStyle = .short
+    let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short
     return f.string(from: d)
 }
