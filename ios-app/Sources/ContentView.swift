@@ -1037,6 +1037,39 @@ private struct SnackbarView: View {
     }
 }
 
+// MARK: - Bulk action bar (Inbox select mode)
+private struct BulkBar: View {
+    let selectedCount: Int
+    let onArchive: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(selectedCount) selected")
+                .font(.subheadline).bold()
+            Spacer()
+            Button {
+                onArchive()
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 2)
+        .padding(.horizontal)
+    }
+}
+
 private struct CompatEmptyState: View {
     let title: String
     let systemImage: String
