@@ -902,34 +902,42 @@ private struct StatsView: View {
 
     var body: some View {
         let range = periodRange()
+        let counts = aggregateCounts(in: range)
+        let completed = completedTasks(in: range)
+        let ratings = ratingsIn(range)
         let (series, _) = state.weeklySeries(lastWeeks: 8)
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Stats").font(.title2).bold()
-                    Spacer()
-                    Menu {
-                        Picker("Period", selection: $period) {
-                            ForEach(ContentView.Period.allCases, id: \.self) { p in
-                                Text(p.rawValue.capitalized).tag(p)
-                            }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Stats").font(.title2).bold()
+                Spacer()
+                Menu {
+                    Picker("Period", selection: $period) {
+                        ForEach(ContentView.Period.allCases, id: \.self) { p in
+                            Text(p.rawValue.capitalized).tag(p)
                         }
-                        if period == .custom {
-                            Divider()
-                            DatePicker("From", selection: $customStart, displayedComponents: .date)
-                            DatePicker("To", selection: $customEnd, displayedComponents: .date)
-                        }
-                    } label: { Label("Period", systemImage: "calendar") }
-                    .buttonStyle(.bordered)
+                    }
+                    if period == .custom {
+                        Divider()
+                        DatePicker("From", selection: $customStart, displayedComponents: .date)
+                        DatePicker("To", selection: $customEnd, displayedComponents: .date)
+                    }
+                } label: { Label("Period", systemImage: "calendar") }
+                .buttonStyle(.bordered)
+            }
+
+            List {
+                Section("Overview") {
+                    KPIBars(
+                        completed: counts.completed,
+                        started: counts.started,
+                        open: counts.open,
+                        total: counts.total
+                    )
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
 
-                GroupBox("Overview") {
-                    let counts = aggregateCounts(in: range)
-                    KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
-                }
-
-                GroupBox("Last 8 weeks (trend)") {
+                Section("Last 8 weeks (trend)") {
                     if #available(iOS 16.0, *) {
                         Chart {
                             ForEach(series, id: \.label) { w in
@@ -940,41 +948,54 @@ private struct StatsView: View {
                         }
                         .frame(height: 220)
                     } else {
-                        Text("Charts requires iOS 16+.").frame(height: 60)
+                        Text("Charts requires iOS 16+.")
+                            .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
                     }
                 }
 
-                GroupBox("Completed Tasks in Period") {
-                    let completed = completedTasks(in: range)
+                Section("Completed Tasks in Period") {
                     if completed.isEmpty {
-                        Text("No completed tasks in this period.").foregroundStyle(.secondary)
+                        Text("No completed tasks in this period.")
+                            .foregroundStyle(.secondary)
                     } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(completed, id: \.id) { t in
-                                HStack {
-                                    Text(t.text).font(.subheadline)
-                                    Spacer()
-                                    Text(t.date ?? "").font(.caption).foregroundStyle(.secondary)
-                                }
+                        ForEach(completed, id: \.id) { t in
+                            HStack {
+                                Text(t.text).font(.subheadline)
+                                Spacer()
+                                Text(t.date ?? "")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
                 }
 
-                GroupBox("Ratings in Period") {
-                    let ratings = ratingsIn(range)
+                Section("Ratings in Period") {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack { Text("Open").frame(width: 80, alignment: .leading); Text("👍 \(ratings.openLiked)"); Text("👎 \(ratings.openDisliked)") }
-                        HStack { Text("Done").frame(width: 80, alignment: .leading); Text("👍 \(ratings.doneLiked)"); Text("👎 \(ratings.doneDisliked)") }
-                        HStack { Text("Deleted").frame(width: 80, alignment: .leading); Text("👍 \(ratings.deletedLiked)"); Text("👎 \(ratings.deletedDisliked)") }
+                        HStack {
+                            Text("Open").frame(width: 80, alignment: .leading)
+                            Text("👍 \(ratings.openLiked)")
+                            Text("👎 \(ratings.openDisliked)")
+                        }
+                        HStack {
+                            Text("Done").frame(width: 80, alignment: .leading)
+                            Text("👍 \(ratings.doneLiked)")
+                            Text("👎 \(ratings.doneDisliked)")
+                        }
+                        HStack {
+                            Text("Deleted").frame(width: 80, alignment: .leading)
+                            Text("👍 \(ratings.deletedLiked)")
+                            Text("👎 \(ratings.deletedDisliked)")
+                        }
                     }
-                    .font(.subheadline)
+                    .font(.subheadline
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .listStyle(.inset)
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
+        .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
