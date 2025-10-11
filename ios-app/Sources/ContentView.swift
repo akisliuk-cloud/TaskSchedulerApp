@@ -37,7 +37,7 @@ struct ContentView: View {
     @State private var isDarkMode = false
     @State private var showingSearch = false
 
-    // NEW: Collapse states
+    // Collapse states
     @State private var isCalendarCollapsed = false
     @State private var isInboxCollapsed = false
 
@@ -92,7 +92,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Text("TaskMate")
-                .font(.title) // slightly smaller than .largeTitle
+                .font(.title)
                 .bold()
 
             Spacer()
@@ -134,8 +134,9 @@ struct ContentView: View {
         // - Default (both expanded): Inbox expands.
         // - Calendar collapsed: Inbox expands.
         // - Inbox collapsed: Calendar expands.
-        // - Both collapsed: neither expands (stacked headers illusion).
-        let shouldExpandCalendar = (!isCalendarCollapsed && isInboxCollapsed)
+        // - Both collapsed: both show header + internal empty space (illusion).
+        let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
+        let shouldExpandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
         let shouldExpandInbox = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
 
         return VStack(spacing: 12) {
@@ -152,41 +153,44 @@ struct ContentView: View {
                 } else {
                     CalendarPanel(
                         state: state,
-                        collapsed: $isCalendarCollapsed
+                        collapsed: $isCalendarCollapsed,
+                        showPlaceholderWhenCollapsed: bothCollapsed
                     ) { day in
                         showingDay = day
                     }
+                    // Calendar expands only when Inbox is collapsed
                     .frame(maxHeight: shouldExpandCalendar ? .infinity : nil)
-                    .animation(.easeInOut, value: isInboxCollapsed)
-                    .animation(.easeInOut, value: isCalendarCollapsed)
                 }
             }
+
             if !(state.isArchiveViewActive || state.isStatsViewActive) {
                 InboxPanel(
                     state: state,
-                    collapsed: $isInboxCollapsed
+                    collapsed: $isInboxCollapsed,
+                    showPlaceholderWhenCollapsed: bothCollapsed
                 )
+                // Inbox expands by default and when Calendar is collapsed
                 .frame(maxHeight: shouldExpandInbox ? .infinity : nil)
-                .animation(.easeInOut, value: isInboxCollapsed)
-                .animation(.easeInOut, value: isCalendarCollapsed)
             }
         }
     }
 }
 
-// MARK: - Calendar panel (extracted)
+// MARK: - Calendar panel
 private struct CalendarPanel: View {
     @ObservedObject var state: AppState
     @Binding var collapsed: Bool
+    /// Only show internal placeholder space when both sections are collapsed (illusion case)
+    var showPlaceholderWhenCollapsed: Bool
     var openDay: (CalendarDay) -> Void
 
-    // Placeholder height to create the “header + empty space” illusion when collapsed
+    // Internal placeholder height for illusion state
     private let collapsedPlaceholderHeight: CGFloat = 60
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // HEADER stays fixed within this card
             HStack {
-                // Chevron to the LEFT of section name
                 Button {
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
                         collapsed.toggle()
@@ -245,7 +249,7 @@ private struct CalendarPanel: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            // Collapsible content (collapses upwards)
+            // CONTENT collapses upwards; header does not move
             if !collapsed {
                 let days = state.calendarDays()
                 let expanded = state.visibleCalendarTasks(for: days)
@@ -276,6 +280,10 @@ private struct CalendarPanel: View {
                             }
                         }
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
@@ -305,17 +313,19 @@ private struct CalendarPanel: View {
                             }
                         }
                         .frame(height: 260)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .move(edge: .top).combined(with: .opacity)
+                        ))
                     }
                 }
-            } else {
-                // Illusion space under header (content hidden)
+            } else if showPlaceholderWhenCollapsed {
+                // Only in BOTH-collapsed state, reserve empty area inside this card
                 Color.clear.frame(height: collapsedPlaceholderHeight)
-                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .animation(.easeInOut, value: collapsed)
     }
 
     private func handleDropToDay(day: CalendarDay, providers: [NSItemProvider]) -> Bool {
@@ -336,12 +346,14 @@ private struct CalendarPanel: View {
     }
 }
 
-// MARK: - Inbox panel (extracted, light to type-check)
+// MARK: - Inbox panel
 private struct InboxPanel: View {
     @ObservedObject var state: AppState
     @Binding var collapsed: Bool
+    /// Only show internal placeholder space when both sections are collapsed (illusion case)
+    var showPlaceholderWhenCollapsed: Bool
 
-    // Placeholder height to create the “header + empty space” illusion when collapsed
+    // Internal placeholder height for illusion state
     private let collapsedPlaceholderHeight: CGFloat = 80
 
     // Local states
@@ -355,9 +367,10 @@ private struct InboxPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // HEADER stays fixed within this card
             header
 
-            // Collapsible content (collapses downwards)
+            // CONTENT collapses downwards; header does not move
             if !collapsed {
                 VStack(alignment: .leading, spacing: 8) {
                     inputRow
@@ -369,12 +382,8 @@ private struct InboxPanel: View {
                             Text("\(state.selectedInboxTaskIds.count) selected").font(.subheadline).bold()
                             Spacer()
                             Menu("Actions") {
-                                Button("Archive") {
-                                    state.archiveSelectedInbox()
-                                }
-                                Button("Delete", role: .destructive) {
-                                    state.deleteSelectedInbox()
-                                }
+                                Button("Archive") { state.archiveSelectedInbox() }
+                                Button("Delete", role: .destructive) { state.deleteSelectedInbox() }
                             }
                             .buttonStyle(.borderedProminent)
                         }
@@ -385,10 +394,9 @@ private struct InboxPanel: View {
                     insertion: .move(edge: .bottom).combined(with: .opacity),
                     removal: .move(edge: .bottom).combined(with: .opacity)
                 ))
-            } else {
-                // Illusion space under header (content hidden)
+            } else if showPlaceholderWhenCollapsed {
+                // Only in BOTH-collapsed state, reserve empty area inside this card
                 Color.clear.frame(height: collapsedPlaceholderHeight)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .padding()
@@ -407,12 +415,10 @@ private struct InboxPanel: View {
             }
             return true
         })
-        .animation(.easeInOut, value: collapsed)
     }
 
     private var header: some View {
         HStack {
-            // Chevron to the LEFT of section name
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
                     collapsed.toggle()
@@ -477,7 +483,6 @@ private struct InboxPanel: View {
     @ViewBuilder private func inboxRow(_ t: TaskItem) -> some View {
         let isEditing = editingTaskId == t.id
         HStack(alignment: .top, spacing: 10) {
-            // Checkbox left of each task when bulk-select is active
             if state.isBulkSelectActiveInbox {
                 Button {
                     if state.selectedInboxTaskIds.contains(t.id) {
@@ -985,7 +990,7 @@ private struct StatsView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // KPI helpers (unchanged from your v1.1)
+    // KPI helpers (unchanged)
     private func aggregateCounts(in range: ClosedRange<Date>) -> (completed: Int, started: Int, open: Int, total: Int) {
         func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
         var open = 0, started = 0, done = 0
