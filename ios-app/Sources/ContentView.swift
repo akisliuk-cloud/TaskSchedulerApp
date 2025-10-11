@@ -890,7 +890,10 @@ private struct ArchivesView: View {
                             if isSelecting {
                                 Button {
                                     if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                                } label: { Image(systemName: "checkmark.square") }
+                                  } label: {
+                                    let imageName = selectedIds.contains(t.id) ? "checkmark.square" : "square"
+                                    Image(systemName: imageName)
+                                }
                             }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(t.text).font(.body)
