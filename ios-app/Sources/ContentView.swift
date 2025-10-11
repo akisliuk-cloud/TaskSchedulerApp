@@ -971,25 +971,7 @@ private struct StatsView: View {
                 }
 
                 Section("Ratings in Period") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Open").frame(width: 80, alignment: .leading)
-                            Text("👍 \(ratings.openLiked)")
-                            Text("👎 \(ratings.openDisliked)")
-                        }
-                        HStack {
-                            Text("Done").frame(width: 80, alignment: .leading)
-                            Text("👍 \(ratings.doneLiked)")
-                            Text("👎 \(ratings.doneDisliked)")
-                        }
-                        HStack {
-                            Text("Deleted").frame(width: 80, alignment: .leading)
-                            Text("👍 \(ratings.deletedLiked)")
-                            Text("👎 \(ratings.deletedDisliked)")
-                        }
-                    }
-                    .font(.subheadline
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    RatingsBreakdownView(ratings: ratings)
                 }
             }
             .listStyle(.inset)
@@ -1042,6 +1024,28 @@ private struct StatsView: View {
             }
         }
         return (oL, oD, dL, dD, delL, delD)
+    }
+}
+
+    private struct RatingsBreakdownView: View {
+    let ratings: (openLiked: Int, openDisliked: Int, doneLiked: Int, doneDisliked: Int, deletedLiked: Int, deletedDisliked: Int)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            row(title: "Open", liked: ratings.openLiked, disliked: ratings.openDisliked)
+            row(title: "Done", liked: ratings.doneLiked, disliked: ratings.doneDisliked)
+            row(title: "Deleted", liked: ratings.deletedLiked, disliked: ratings.deletedDisliked)
+        }
+        .font(.subheadline)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func row(title: String, liked: Int, disliked: Int) -> some View {
+        HStack {
+            Text(title).frame(width: 80, alignment: .leading)
+            Text("👍 \(liked)")
+            Text("👎 \(disliked)")
+        }
     }
 }
 
