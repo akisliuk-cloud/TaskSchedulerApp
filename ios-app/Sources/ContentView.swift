@@ -126,8 +126,8 @@ struct ContentView: View {
         // Layout rules:
         // - Default (both expanded): Inbox fills the remainder.
         // - Calendar collapsed: Inbox fills remainder (shows more tasks).
-        // - Inbox collapsed: Calendar fills remainder (shows more dates in LIST mode; CARD view still stretches as required).
-        // - Both collapsed: Inbox card fills space (background only), content hidden.
+        // - Inbox collapsed: Calendar fills remainder (shows more dates in LIST mode; CARD view still stretches).
+        // - Both collapsed: Inbox card fills remaining space, content hidden.
         let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
         let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
         let expandInboxDefault = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
@@ -235,7 +235,7 @@ private struct CalendarPanel: View {
                 let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
 
                 if state.calendarViewMode == .card {
-                    // Horizontal cards: now also stretch vertically when shouldFill is true
+                    // Horizontal cards: stretch vertically when shouldFill is true
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
@@ -259,7 +259,6 @@ private struct CalendarPanel: View {
                                 withAnimation { proxy.scrollTo(dayCardID(today), anchor: .leading) }
                             }
                         }
-                        // ⬇️ NEW: stretch the scroll area vertically when filling
                         .frame(maxHeight: shouldFill ? .infinity : nil, alignment: .top)
                     }
                     .transition(.asymmetric(
@@ -391,6 +390,10 @@ private struct InboxPanel: View {
                     insertion: .move(edge: .bottom).combined(with: .opacity),
                     removal: .move(edge: .bottom).combined(with: .opacity)
                 ))
+            } else if shouldFill {
+                // NEW: when collapsed AND we should fill (e.g., both collapsed),
+                // stretch the card to the bottom while keeping tasks hidden.
+                Spacer(minLength: 0)
             }
         }
         .padding()
@@ -409,6 +412,8 @@ private struct InboxPanel: View {
             }
             return true
         })
+        // Allow the whole panel to expand when needed
+        .frame(maxHeight: shouldFill ? .infinity : nil, alignment: .top)
     }
 
     private var header: some View {
@@ -694,7 +699,7 @@ private struct DayModalView: View {
                 if isBulk {
                     Button {
                         if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                    } label: { Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square") }
+                    } label: { Image(systemName: "checkmark.square") }
                 }
                 Text(t.text).font(.body).bold()
                 if t.isRecurring { Image(systemName: "repeat") }
@@ -813,7 +818,7 @@ private struct ArchivesView: View {
                             if isSelecting {
                                 Button {
                                     if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                                } label: { Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square") }
+                                } label: { Image(systemName: "checkmark.square") }
                             }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(t.text).font(.body)
