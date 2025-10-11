@@ -35,7 +35,7 @@ struct ContentView: View {
     @State private var selectedModalIds = Set<Int>()
     @State private var showingMenu = false
     @State private var isDarkMode = false
-    @State private var showingSearch = false // kept for header; bottom search uses inline bar
+    @State private var showingSearch = false // legacy sheet (header button). Inline search is separate.
 
     // Collapse states
     @State private var isCalendarCollapsed = false
@@ -45,6 +45,9 @@ struct ContentView: View {
     enum BottomTab { case home, stats, camera, archive, search }
     @State private var selectedTab: BottomTab = .home
 
+    // Inline search focus (to dismiss keyboard on Cancel)
+    @FocusState private var isInlineSearchFocused: Bool
+
     // Stats period controls
     enum Period: String, CaseIterable { case weekly, monthly, quarterly, semester, yearly, custom }
     @State private var statsPeriod: Period = .weekly
@@ -52,30 +55,43 @@ struct ContentView: View {
     @State private var customEnd: Date = Date()
 
     var body: some View {
-        VStack(spacing: 16) {
-            header
+        // Root layer keeps header pinned; content ignores keyboard pushes,
+        // while the bottom nav uses safeAreaInset so it sits above the keyboard.
+        ZStack(alignment: .top) {
+            VStack(spacing: 16) {
+                header
 
-            // Inline search bar — appears globally when Search tab is selected
-            if selectedTab == .search {
-                InlineSearchBar(
-                    text: $state.searchQuery,
-                    onClearAndHide: {
-                        state.searchQuery = ""
-                        selectedTab = .home // hide search bar per your spec
-                    }
-                )
+                // Inline search bar — appears globally when Search tab selected
+                if selectedTab == .search {
+                    InlineSearchBar(
+                        text: $state.searchQuery,
+                        isFocused: $isInlineSearchFocused,
+                        onCancel: {
+                            // 1) Dismiss keyboard, 2) clear text, 3) hide bar (go Home)
+                            isInlineSearchFocused = false
+                            state.searchQuery = ""
+                            selectedTab = .home
+                        }
+                    )
+                }
+
+                mainPanels
             }
-
-            mainPanels
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // Critical: prevent the keyboard from pushing the whole app up (keeps header pinned).
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .padding()
-        .frame(maxHeight: .infinity, alignment: .top) // top-pinned app
         .preferredColorScheme(isDarkMode ? .dark : .light)
+        // Bottom nav is injected at the root; it stays visible and floats above keyboard.
         .safeAreaInset(edge: .bottom) {
             BottomNavBar(
                 selected: selectedTab,
-                onSelect: selectTab(_:))
+                onSelect: selectTab(_:)
+            )
+            .zIndex(10)
         }
+        // Sheets unchanged
         .sheet(item: $showingDay) { day in
             DayModalView(day: day, state: state,
                          isBulk: $isModalBulkSelect,
@@ -83,7 +99,6 @@ struct ContentView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showingSearch) {
-            // Header search (legacy behavior, unchanged). Bottom "Search" uses inline bar.
             SearchSheet(searchText: $state.searchQuery)
                 .presentationDetents([.fraction(0.25), .medium])
         }
@@ -92,7 +107,6 @@ struct ContentView: View {
                 searchText: $state.searchQuery,
                 isDarkMode: $isDarkMode,
                 gotoHome: {
-                    // From menu: go Home but DO NOT reset collapse states
                     state.isArchiveViewActive = false
                     state.isStatsViewActive = false
                     selectedTab = .home
@@ -101,7 +115,7 @@ struct ContentView: View {
                 gotoArchives: {
                     state.isArchiveViewActive = true
                     state.isStatsViewActive = false
-                    selectedTab = .archive // do not auto-sync when header buttons used; but via menu it's explicit
+                    selectedTab = .archive
                     showingMenu = false
                 },
                 gotoStats: {
@@ -115,7 +129,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Header (compact — icons only on right)
+    // MARK: Header (compact — icons only on right; always pinned)
     private var header: some View {
         HStack(spacing: 12) {
             Text("TaskMate")
@@ -125,37 +139,44 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 10) {
-                // Keep legacy header search (sheet). Bottom-bar Search uses inline bar.
-                Button { showingSearch = true } label: { Image(systemName: "magnifyingglass").imageScale(.large) }
-                    .accessibilityLabel("Search")
+                // Legacy sheet search (kept). Bottom-bar Search uses inline bar.
+                Button { showingSearch = true } label: {
+                    Image(systemName: "magnifyingglass").imageScale(.large)
+                }
+                .accessibilityLabel("Search")
 
                 Button {
                     state.isStatsViewActive.toggle()
                     if state.isStatsViewActive { state.isArchiveViewActive = false }
-                    // Per your spec, bottom bar selection should NOT auto-sync when header toggles.
-                } label: { Image(systemName: "chart.bar").imageScale(.large) }
-                    .accessibilityLabel("Stats")
+                    // Per spec, bottom bar selection does NOT auto-sync from header toggles.
+                } label: {
+                    Image(systemName: "chart.bar").imageScale(.large)
+                }
+                .accessibilityLabel("Stats")
 
                 Button {
                     state.isArchiveViewActive.toggle()
                     if state.isArchiveViewActive { state.isStatsViewActive = false }
-                    // No auto-sync to bottom-bar selection when header toggles.
-                } label: { Image(systemName: "archivebox").imageScale(.large) }
-                    .accessibilityLabel("Archives")
+                } label: {
+                    Image(systemName: "archivebox").imageScale(.large)
+                }
+                .accessibilityLabel("Archives")
 
-                Button { showingMenu = true } label: { Image(systemName: "line.3.horizontal").imageScale(.large) }
-                    .accessibilityLabel("Menu")
+                Button { showingMenu = true } label: {
+                    Image(systemName: "line.3.horizontal").imageScale(.large)
+                }
+                .accessibilityLabel("Menu")
             }
             .buttonStyle(.bordered)
         }
     }
 
-    // MARK: Main panels
+    // MARK: Main panels (kept as before — header stays pinned)
     private var mainPanels: some View {
-        // Layout rules:
+        // Layout rules remain:
         // - Default (both expanded): Inbox fills the remainder.
-        // - Calendar collapsed: Inbox fills remainder (shows more tasks).
-        // - Inbox collapsed: Calendar fills remainder (List shows more; Card stretches).
+        // - Calendar collapsed: Inbox fills remainder.
+        // - Inbox collapsed: Calendar fills remainder (List grows; Card stretches).
         // - Both collapsed: Inbox card fills remaining space, content hidden.
         let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
         let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
@@ -208,19 +229,20 @@ struct ContentView: View {
             state.isArchiveViewActive = true
             state.isStatsViewActive = false
         case .search:
-            // Just show inline search bar globally; no other nav change
-            break
+            // Show inline search; give it focus so keyboard appears
+            isInlineSearchFocused = true
         case .camera:
-            // Do nothing except selection (blue state)
+            // Selected-only — no action
             break
         }
     }
 }
 
-// MARK: - Inline Search Bar (global, below header)
+// MARK: - Inline Search Bar (global, below header; does not move header)
 private struct InlineSearchBar: View {
     @Binding var text: String
-    var onClearAndHide: () -> Void
+    @FocusState.Binding var isFocused: Bool
+    var onCancel: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -230,10 +252,12 @@ private struct InlineSearchBar: View {
 
             TextField("Search tasks…", text: $text)
                 .textFieldStyle(.roundedBorder)
+                .focused($isFocused) // focus drives keyboard
+                .submitLabel(.search)
 
             if !text.isEmpty {
                 Button {
-                    onClearAndHide()
+                    onCancel() // clear + hide + dismiss in parent
                 } label: {
                     Image(systemName: "xmark.circle.fill").imageScale(.medium)
                 }
@@ -241,7 +265,7 @@ private struct InlineSearchBar: View {
                 .accessibilityLabel("Clear search and hide")
             } else {
                 Button {
-                    onClearAndHide()
+                    onCancel()
                 } label: {
                     Text("Cancel")
                 }
@@ -252,7 +276,7 @@ private struct InlineSearchBar: View {
     }
 }
 
-// MARK: - Bottom Nav Bar
+// MARK: - Bottom Nav Bar (always pinned; single selection highlight)
 private struct BottomNavBar: View {
     let selected: ContentView.BottomTab
     let onSelect: (ContentView.BottomTab) -> Void
@@ -269,9 +293,10 @@ private struct BottomNavBar: View {
             }
             .padding(.horizontal, 14)
             .padding(.top, 8)
-            .padding(.bottom, 10) // comfy tap target
+            .padding(.bottom, 10)
             .background(.ultraThinMaterial)
         }
+        .background(.clear)
     }
 
     @ViewBuilder
@@ -284,7 +309,7 @@ private struct BottomNavBar: View {
                 Image(systemName: systemImage)
                     .imageScale(.large)
                 Text(label)
-                    .font(.caption2)
+                    .font(.caption2.weight(isSel ? .semibold : .regular))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
@@ -296,9 +321,7 @@ private struct BottomNavBar: View {
     }
 }
 
-// =========================
-// The rest of your file is unchanged, except where noted earlier
-// =========================
+// ======= Panels below remain as in your last working version (minor layout safety retained) =======
 
 // MARK: - Calendar panel
 private struct CalendarPanel: View {
@@ -315,7 +338,7 @@ private struct CalendarPanel: View {
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { collapsed.toggle() }
                 } label: {
                     Image(systemName: "chevron.down")
-                        .rotationEffect(.degrees(collapsed ? -90 : 0)) // right when collapsed
+                        .rotationEffect(.degrees(collapsed ? -90 : 0))
                         .animation(.easeInOut, value: collapsed)
                         .imageScale(.medium)
                         .padding(.trailing, 2)
@@ -370,7 +393,7 @@ private struct CalendarPanel: View {
                 let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
 
                 if state.calendarViewMode == .card {
-                    // Horizontal cards: stretch vertically when shouldFill is true
+                    // Horizontal cards (stretch vertically when shouldFill is true)
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
@@ -551,7 +574,7 @@ private struct InboxPanel: View {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { collapsed.toggle() }
             } label: {
                 Image(systemName: "chevron.down")
-                    .rotationEffect(.degrees(collapsed ? -90 : 0)) // right when collapsed
+                    .rotationEffect(.degrees(collapsed ? -90 : 0))
                     .animation(.easeInOut, value: collapsed)
                     .imageScale(.medium)
                     .padding(.trailing, 2)
