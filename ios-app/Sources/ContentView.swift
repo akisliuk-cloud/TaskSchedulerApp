@@ -53,7 +53,7 @@ struct ContentView: View {
             mainPanels
         }
         .padding()
-        // PINS the whole interface to the top; no vertical centering when content shrinks
+        // Pinned UI: top-level container never recenters vertically
         .frame(maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .sheet(item: $showingDay) { day in
@@ -132,13 +132,16 @@ struct ContentView: View {
 
     // MARK: Main panels
     private var mainPanels: some View {
-        // Expansion rules:
-        // - Default (both expanded): Inbox expands.
-        // - Calendar collapsed: Inbox expands.
-        // - Inbox collapsed: Calendar expands.
-        // - Both collapsed: neither expands (just headers), no internal placeholders.
-        let shouldExpandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
-        let shouldExpandInbox = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
+        // Rules:
+        // - Default (both expanded): Inbox expands to fill remainder.
+        // - Calendar collapsed: Inbox expands upward to sit directly under Calendar header (no gaps).
+        // - Inbox collapsed: Calendar expands downward to sit directly above Inbox header (no gaps).
+        // - Both collapsed: Inbox card fills remaining screen (background visible), but its *content stays hidden*.
+        let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
+        let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
+        let expandInboxDefault = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
+        let expandInboxWhenBothCollapsed = bothCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive)
+        let expandInbox = expandInboxDefault || expandInboxWhenBothCollapsed
 
         return VStack(spacing: 12) {
             Group {
@@ -158,8 +161,8 @@ struct ContentView: View {
                     ) { day in
                         showingDay = day
                     }
-                    // Calendar expands only when Inbox is collapsed
-                    .frame(maxHeight: shouldExpandCalendar ? .infinity : nil)
+                    // Important: pin content to the TOP inside the expanded frame
+                    .frame(maxHeight: expandCalendar ? .infinity : nil, alignment: .top)
                 }
             }
 
@@ -168,11 +171,11 @@ struct ContentView: View {
                     state: state,
                     collapsed: $isInboxCollapsed
                 )
-                // Inbox expands by default and when Calendar is collapsed
-                .frame(maxHeight: shouldExpandInbox ? .infinity : nil)
+                // Important: pin content to the TOP inside the expanded frame
+                .frame(maxHeight: expandInbox ? .infinity : nil, alignment: .top)
             }
         }
-        // Make sure the panels column itself is pinned to top as well
+        // The stack itself is pinned to top, so nothing recenters vertically
         .frame(maxHeight: .infinity, alignment: .top)
     }
 }
@@ -364,7 +367,7 @@ private struct InboxPanel: View {
                     inputRow
                     listArea
 
-                    // Bulk action bar (matches daily calendar modal style)
+                    // Bulk action bar
                     if state.isBulkSelectActiveInbox, !state.selectedInboxTaskIds.isEmpty {
                         HStack {
                             Text("\(state.selectedInboxTaskIds.count) selected").font(.subheadline).bold()
@@ -922,7 +925,7 @@ private struct StatsView: View {
                 .buttonStyle(.bordered)
             }
 
-            // KPI bars
+            // KPI bars (Completed / Started / Open / Total)
             let counts = aggregateCounts(in: range)
             KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
 
@@ -960,7 +963,7 @@ private struct StatsView: View {
                 }
             }
 
-            // Ratings breakdown
+            // Ratings breakdown (Open, Done, Deleted)
             GroupBox("Ratings in Period") {
                 let ratings = ratingsIn(range)
                 VStack(alignment: .leading, spacing: 8) {
@@ -975,7 +978,7 @@ private struct StatsView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // KPI helpers
+    // KPI helpers (scoped here to avoid "cannot find in scope")
     private func aggregateCounts(in range: ClosedRange<Date>) -> (completed: Int, started: Int, open: Int, total: Int) {
         func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
         var open = 0, started = 0, done = 0
