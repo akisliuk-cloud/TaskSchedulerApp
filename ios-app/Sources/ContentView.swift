@@ -2,7 +2,6 @@
 import SwiftUI
 import Foundation
 import Charts
-import UIKit
 
 // MARK: - Small helpers for scroll targets
 private func dayCardID(_ dateStr: String) -> String { "card-\(dateStr)" }
@@ -27,33 +26,8 @@ struct CompatEmptyState: View {
     }
 }
 
-// MARK: - Keyboard observer (keeps bottom bar above keyboard; header pinned)
-final class KeyboardObserver: ObservableObject {
-    @Published var height: CGFloat = 0
-    init() {
-        NotificationCenter.default.addObserver(self, selector: #selector(onChange(_:)),
-                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(onChange(_:)),
-                                               name: UIResponder.keyboardWillHideNotification, object: nil)
-    }
-    @objc private func onChange(_ note: Notification) {
-        guard let info = note.userInfo else { return }
-        let endFrame = (info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .zero
-        let screenMaxY = UIScreen.main.bounds.maxY
-        let overlap = max(0, screenMaxY - endFrame.origin.y)
-        let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
-        let curveRaw = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
-        let options = UIView.AnimationOptions(rawValue: curveRaw << 16)
-        UIView.animate(withDuration: duration, delay: 0, options: options) {
-            self.height = overlap
-        }
-    }
-    deinit { NotificationCenter.default.removeObserver(self) }
-}
-
 struct ContentView: View {
     @StateObject private var state = AppState()
-    @StateObject private var keyboard = KeyboardObserver()
 
     // Sheets / modals
     @State private var showingDay: CalendarDay? = nil
@@ -61,18 +35,11 @@ struct ContentView: View {
     @State private var selectedModalIds = Set<Int>()
     @State private var showingMenu = false
     @State private var isDarkMode = false
-    @State private var showingSearch = false // legacy sheet (kept, not used by bottom bar search)
+    @State private var showingSearch = false
 
     // Collapse states
     @State private var isCalendarCollapsed = false
     @State private var isInboxCollapsed = false
-
-    // Bottom navigation
-    enum BottomTab { case home, stats, camera, archive, search }
-    @State private var selectedTab: BottomTab = .home
-
-    // Inline search focus (to dismiss keyboard on Cancel)
-    @FocusState private var isInlineSearchFocused: Bool
 
     // Stats period controls
     enum Period: String, CaseIterable { case weekly, monthly, quarterly, semester, yearly, custom }
@@ -80,56 +47,21 @@ struct ContentView: View {
     @State private var customStart: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var customEnd: Date = Date()
 
-    // Bottom bar constant height
-    private let bottomBarHeight: CGFloat = 56
-
     var body: some View {
-        ZStack(alignment: .top) {
-            // Main column (header + optional inline search + content panels)
-            VStack(spacing: 16) {
-                header
-
-                // Inline search bar — appears globally when Search tab selected
-                if selectedTab == .search {
-                    InlineSearchBar(
-                        text: $state.searchQuery,
-                        isFocused: $isInlineSearchFocused,
-                        onCancel: {
-                            isInlineSearchFocused = false
-                            state.searchQuery = ""
-                            selectedTab = .home
-                        }
-                    )
-                }
-
-                mainPanels
-            }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            // Keep header pinned: never let keyboard push this whole column.
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            // Ensure content never sits under the bottom bar (and moves up when keyboard is visible)
-            .padding(.bottom, bottomBarHeight + max(0, keyboard.height))
+        VStack(spacing: 16) {
+            header
+            mainPanels
         }
+        .padding()
+        .frame(maxHeight: .infinity, alignment: .top) // top-pinned app
         .preferredColorScheme(isDarkMode ? .dark : .light)
-        // Pinned bottom bar: overlay anchored to bottom, raised above keyboard
-        .overlay(alignment: .bottom) {
-            BottomNavBar(selected: selectedTab, onSelect: selectTab(_:))
-                .padding(.bottom, max(0, keyboard.height))
-                .background(.ultraThinMaterial)
-                .frame(maxWidth: .infinity)
-                .frame(height: bottomBarHeight)
-                .overlay(Divider(), alignment: .top)
-                .zIndex(1000)
-        }
-        // Sheets (unchanged)
         .sheet(item: $showingDay) { day in
             DayModalView(day: day, state: state,
                          isBulk: $isModalBulkSelect,
                          selectedIds: $selectedModalIds)
                 .presentationDetents([.medium, .large])
         }
-        .sheet(isPresented: $showingSearch) { // legacy
+        .sheet(isPresented: $showingSearch) {
             SearchSheet(searchText: $state.searchQuery)
                 .presentationDetents([.fraction(0.25), .medium])
         }
@@ -140,19 +72,16 @@ struct ContentView: View {
                 gotoHome: {
                     state.isArchiveViewActive = false
                     state.isStatsViewActive = false
-                    selectedTab = .home
                     showingMenu = false
                 },
                 gotoArchives: {
                     state.isArchiveViewActive = true
                     state.isStatsViewActive = false
-                    selectedTab = .archive
                     showingMenu = false
                 },
                 gotoStats: {
                     state.isStatsViewActive = true
                     state.isArchiveViewActive = false
-                    selectedTab = .stats
                     showingMenu = false
                 }
             )
@@ -160,7 +89,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Header (compact — icons only on right) — ALWAYS pinned
+    // MARK: Header (compact — icons only on right)
     private var header: some View {
         HStack(spacing: 12) {
             Text("TaskMate")
@@ -170,7 +99,6 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 10) {
-                // Legacy sheet (kept). Inline search is driven by bottom-bar "Search".
                 Button { showingSearch = true } label: { Image(systemName: "magnifyingglass").imageScale(.large) }
                     .accessibilityLabel("Search")
 
@@ -234,94 +162,6 @@ struct ContentView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    // MARK: Bottom bar actions (Home navigates back; Stats/Archive symmetric; Camera selects only; Search shows inline)
-    private func selectTab(_ tab: BottomTab) {
-        selectedTab = tab
-        switch tab {
-        case .home:
-            state.isStatsViewActive = false
-            state.isArchiveViewActive = false
-        case .stats:
-            state.isStatsViewActive = true
-            state.isArchiveViewActive = false
-        case .archive:
-            state.isArchiveViewActive = true
-            state.isStatsViewActive = false
-        case .search:
-            isInlineSearchFocused = true // focus text field so keyboard comes up
-        case .camera:
-            break // selected-only (turns blue)
-        }
-    }
-}
-
-// MARK: - Inline Search Bar (global, below pinned header)
-private struct InlineSearchBar: View {
-    @Binding var text: String
-    @FocusState.Binding var isFocused: Bool
-    var onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .imageScale(.medium)
-                .foregroundStyle(.secondary)
-
-            TextField("Search tasks…", text: $text)
-                .textFieldStyle(.roundedBorder)
-                .focused($isFocused)
-                .submitLabel(.search)
-
-            if !text.isEmpty {
-                Button(action: onCancel) {
-                    Image(systemName: "xmark.circle.fill").imageScale(.medium)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search and hide")
-            } else {
-                Button("Cancel", action: onCancel)
-                    .accessibilityLabel("Hide search")
-            }
-        }
-        .padding(.vertical, 6)
-    }
-}
-
-// MARK: - Bottom Nav Bar (overlay; never disappears; single selection highlight)
-private struct BottomNavBar: View {
-    let selected: ContentView.BottomTab
-    let onSelect: (ContentView.BottomTab) -> Void
-
-    var body: some View {
-        HStack {
-            item(.home, label: "Home", systemImage: "house")
-            item(.stats, label: "Stats", systemImage: "chart.bar")
-            item(.camera, label: "Camera", systemImage: "camera")
-            item(.archive, label: "Archive", systemImage: "archivebox")
-            item(.search, label: "Search", systemImage: "magnifyingglass")
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        .background(.ultraThinMaterial)
-    }
-
-    @ViewBuilder
-    private func item(_ tab: ContentView.BottomTab, label: String, systemImage: String) -> some View {
-        let isSel = (selected == tab)
-        Button { onSelect(tab) } label: {
-            VStack(spacing: 2) {
-                Image(systemName: systemImage).imageScale(.large)
-                Text(label).font(.caption2.weight(isSel ? .semibold : .regular)).lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(isSel ? Color.blue : Color.secondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 }
 
@@ -551,7 +391,7 @@ private struct InboxPanel: View {
                     removal: .move(edge: .bottom).combined(with: .opacity)
                 ))
             } else if shouldFill {
-                // when collapsed AND we should fill (e.g., both collapsed),
+                // NEW: when collapsed AND we should fill (e.g., both collapsed),
                 // stretch the card to the bottom while keeping tasks hidden.
                 Spacer(minLength: 0)
             }
@@ -1184,7 +1024,7 @@ private struct KPIBars: View {
     }
 }
 
-// MARK: - Search & Menu Sheets (legacy)
+// MARK: - Search & Menu Sheets
 private struct SearchSheet: View {
     @Binding var searchText: String
     var body: some View {
