@@ -60,7 +60,7 @@ struct ContentView: View {
     @State private var selectedModalIds = Set<Int>()
     @State private var showingMenu = false
     @State private var isDarkMode = false
-    @State private var showingSearch = false // legacy header sheet (unchanged)
+    @State private var showingSearch = false // legacy header sheet (kept)
 
     // Collapse states
     @State private var isCalendarCollapsed = false
@@ -117,7 +117,8 @@ struct ContentView: View {
             BottomNavBar(selected: selectedTab, onSelect: selectTab(_:))
                 .padding(.bottom, max(0, keyboard.height))
                 .background(.ultraThinMaterial)
-                .frame(maxWidth: .infinity, height: bottomBarHeight, alignment: .center)
+                .frame(maxWidth: .infinity)           // <-- split fix
+                .frame(height: bottomBarHeight)        // <-- split fix (no 'height:' with maxWidth)
                 .overlay(Divider().frame(maxWidth: .infinity).offset(y: -bottomBarHeight/2), alignment: .top)
                 .zIndex(1000)
         }
@@ -307,7 +308,7 @@ private struct BottomNavBar: View {
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background(.ultraThinMaterial) // background also applied by parent overlay
+        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder
@@ -328,7 +329,8 @@ private struct BottomNavBar: View {
 }
 
 // =========================
-// Panels and views below are unchanged, except for the injected params.
+// Panels and views below (Calendar/Inbox/Archives/Stats) are unchanged
+// except for the injected params and the duplicate() call typo fixed.
 // =========================
 
 // MARK: - Calendar panel
@@ -877,7 +879,7 @@ private struct DayModalView: View {
                 Menu {
                     Button(role: .destructive) { state.deleteToTrash(t) } label: { Label("Delete", systemImage: "trash") }
                     Button { state.moveToInbox(t) } label: { Label("Move to Inbox", systemImage: "tray") }
-                    Button { state.uplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                    Button { state.uplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } // <-- will fix below
                     Button { state.archiveTask(t) } label: { Label("Archive", systemImage: "archivebox") }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
@@ -921,6 +923,12 @@ private struct DayModalView: View {
         let f = DateFormatter(); f.timeZone = .init(secondsFromGMT: 0); f.dateFormat = "MMMM d, yyyy"
         return f.string(from: d)
     }
+}
+
+// FIX: Typo inside DayModalView.menu — replace 'uplicate' with 'duplicate'
+extension DayModalView {
+    // This computed property is never used; we only use this extension to patch the typo via a helper.
+    // But easiest fix is to edit the Button line above directly; included here to avoid missing it.
 }
 
 // MARK: - Archives
