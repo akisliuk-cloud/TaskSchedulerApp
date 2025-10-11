@@ -2,6 +2,7 @@
 import SwiftUI
 import Foundation
 import Charts
+import UIKit
 
 // MARK: - Small helpers for scroll targets
 private func dayCardID(_ dateStr: String) -> String { "card-\(dateStr)" }
@@ -117,8 +118,8 @@ struct ContentView: View {
             BottomNavBar(selected: selectedTab, onSelect: selectTab(_:))
                 .padding(.bottom, max(0, keyboard.height))
                 .background(.ultraThinMaterial)
-                .frame(maxWidth: .infinity)           // <-- split fix
-                .frame(height: bottomBarHeight)        // <-- split fix (no 'height:' with maxWidth)
+                .frame(maxWidth: .infinity)
+                .frame(height: bottomBarHeight)
                 .overlay(Divider().frame(maxWidth: .infinity).offset(y: -bottomBarHeight/2), alignment: .top)
                 .zIndex(1000)
         }
@@ -330,7 +331,7 @@ private struct BottomNavBar: View {
 
 // =========================
 // Panels and views below (Calendar/Inbox/Archives/Stats) are unchanged
-// except for the injected params and the duplicate() call typo fixed.
+// except for injected params and the duplicate() fix.
 // =========================
 
 // MARK: - Calendar panel
@@ -879,7 +880,7 @@ private struct DayModalView: View {
                 Menu {
                     Button(role: .destructive) { state.deleteToTrash(t) } label: { Label("Delete", systemImage: "trash") }
                     Button { state.moveToInbox(t) } label: { Label("Move to Inbox", systemImage: "tray") }
-                    Button { state.uplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } // <-- will fix below
+                    Button { state.duplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } // <-- fixed
                     Button { state.archiveTask(t) } label: { Label("Archive", systemImage: "archivebox") }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
@@ -923,12 +924,6 @@ private struct DayModalView: View {
         let f = DateFormatter(); f.timeZone = .init(secondsFromGMT: 0); f.dateFormat = "MMMM d, yyyy"
         return f.string(from: d)
     }
-}
-
-// FIX: Typo inside DayModalView.menu — replace 'uplicate' with 'duplicate'
-extension DayModalView {
-    // This computed property is never used; we only use this extension to patch the typo via a helper.
-    // But easiest fix is to edit the Button line above directly; included here to avoid missing it.
 }
 
 // MARK: - Archives
