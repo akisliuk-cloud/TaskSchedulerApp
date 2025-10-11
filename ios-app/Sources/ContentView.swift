@@ -53,8 +53,7 @@ struct ContentView: View {
             mainPanels
         }
         .padding()
-        // Pinned UI: top-level container never recenters vertically
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxHeight: .infinity, alignment: .top) // top-pinned app
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .sheet(item: $showingDay) { day in
             DayModalView(day: day, state: state,
@@ -100,31 +99,23 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 10) {
-                Button { showingSearch = true } label: {
-                    Image(systemName: "magnifyingglass").imageScale(.large)
-                }
-                .accessibilityLabel("Search")
+                Button { showingSearch = true } label: { Image(systemName: "magnifyingglass").imageScale(.large) }
+                    .accessibilityLabel("Search")
 
                 Button {
                     state.isStatsViewActive.toggle()
                     if state.isStatsViewActive { state.isArchiveViewActive = false }
-                } label: {
-                    Image(systemName: "chart.bar").imageScale(.large)
-                }
-                .accessibilityLabel("Stats")
+                } label: { Image(systemName: "chart.bar").imageScale(.large) }
+                    .accessibilityLabel("Stats")
 
                 Button {
                     state.isArchiveViewActive.toggle()
                     if state.isArchiveViewActive { state.isStatsViewActive = false }
-                } label: {
-                    Image(systemName: "archivebox").imageScale(.large)
-                }
-                .accessibilityLabel("Archives")
+                } label: { Image(systemName: "archivebox").imageScale(.large) }
+                    .accessibilityLabel("Archives")
 
-                Button { showingMenu = true } label: {
-                    Image(systemName: "line.3.horizontal").imageScale(.large)
-                }
-                .accessibilityLabel("Menu")
+                Button { showingMenu = true } label: { Image(systemName: "line.3.horizontal").imageScale(.large) }
+                    .accessibilityLabel("Menu")
             }
             .buttonStyle(.bordered)
         }
@@ -132,11 +123,11 @@ struct ContentView: View {
 
     // MARK: Main panels
     private var mainPanels: some View {
-        // Rules:
-        // - Default (both expanded): Inbox expands to fill remainder.
-        // - Calendar collapsed: Inbox expands upward to sit directly under Calendar header (no gaps).
-        // - Inbox collapsed: Calendar expands downward to sit directly above Inbox header (no gaps).
-        // - Both collapsed: Inbox card fills remaining screen (background visible), but its *content stays hidden*.
+        // Layout rules:
+        // - Default (both expanded): Inbox fills the remainder.
+        // - Calendar collapsed: Inbox fills remainder (shows more tasks).
+        // - Inbox collapsed: Calendar fills remainder (shows more dates in LIST mode).
+        // - Both collapsed: Inbox card fills space (background only), content hidden.
         let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
         let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
         let expandInboxDefault = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
@@ -146,22 +137,17 @@ struct ContentView: View {
         return VStack(spacing: 12) {
             Group {
                 if state.isStatsViewActive {
-                    StatsView(
-                        state: state,
-                        period: $statsPeriod,
-                        customStart: $customStart,
-                        customEnd: $customEnd
-                    )
+                    StatsView(state: state, period: $statsPeriod, customStart: $customStart, customEnd: $customEnd)
                 } else if state.isArchiveViewActive {
                     ArchivesView(state: state)
                 } else {
                     CalendarPanel(
                         state: state,
-                        collapsed: $isCalendarCollapsed
+                        collapsed: $isCalendarCollapsed,
+                        shouldFill: expandCalendar
                     ) { day in
                         showingDay = day
                     }
-                    // Important: pin content to the TOP inside the expanded frame
                     .frame(maxHeight: expandCalendar ? .infinity : nil, alignment: .top)
                 }
             }
@@ -169,13 +155,12 @@ struct ContentView: View {
             if !(state.isArchiveViewActive || state.isStatsViewActive) {
                 InboxPanel(
                     state: state,
-                    collapsed: $isInboxCollapsed
+                    collapsed: $isInboxCollapsed,
+                    shouldFill: expandInbox
                 )
-                // Important: pin content to the TOP inside the expanded frame
                 .frame(maxHeight: expandInbox ? .infinity : nil, alignment: .top)
             }
         }
-        // The stack itself is pinned to top, so nothing recenters vertically
         .frame(maxHeight: .infinity, alignment: .top)
     }
 }
@@ -184,16 +169,15 @@ struct ContentView: View {
 private struct CalendarPanel: View {
     @ObservedObject var state: AppState
     @Binding var collapsed: Bool
+    var shouldFill: Bool
     var openDay: (CalendarDay) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // HEADER stays fixed within this card
+            // Fixed header
             HStack {
                 Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                        collapsed.toggle()
-                    }
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { collapsed.toggle() }
                 } label: {
                     Image(systemName: "chevron.down")
                         .rotationEffect(.degrees(collapsed ? -90 : 0)) // right when collapsed
@@ -212,9 +196,7 @@ private struct CalendarPanel: View {
                         Text("Cards").tag(CalendarViewMode.card)
                         Text("List").tag(CalendarViewMode.list)
                     }
-                } label: {
-                    Label("View", systemImage: "rectangle.3.offgrid")
-                }
+                } label: { Label("View", systemImage: "rectangle.3.offgrid") }
                 .menuStyle(.borderlessButton)
                 .buttonStyle(.bordered)
 
@@ -232,9 +214,7 @@ private struct CalendarPanel: View {
                         get: { state.calendarFilters[.completed] ?? true },
                         set: { state.calendarFilters[.completed] = $0 }
                     )) { Text("Done") }
-                } label: {
-                    Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
-                }
+                } label: { Label("Filter", systemImage: "line.3.horizontal.decrease.circle") }
                 .menuStyle(.borderlessButton)
                 .buttonStyle(.bordered)
 
@@ -248,13 +228,14 @@ private struct CalendarPanel: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            // CONTENT collapses upwards; header does not move
+            // Content collapses upward
             if !collapsed {
                 let days = state.calendarDays()
                 let expanded = state.visibleCalendarTasks(for: days)
                 let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
 
                 if state.calendarViewMode == .card {
+                    // Horizontal cards: keep natural height (vertical fill doesn't reveal more)
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
@@ -284,6 +265,7 @@ private struct CalendarPanel: View {
                         removal: .move(edge: .top).combined(with: .opacity)
                     ))
                 } else {
+                    // LIST mode: allow vertical growth when the inbox is collapsed.
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(spacing: 6) {
@@ -306,12 +288,14 @@ private struct CalendarPanel: View {
                                         .padding(.top, 16)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .top)
                             .onAppear {
                                 let today = ISO8601.dateOnly.string(from: Date())
                                 withAnimation { proxy.scrollTo(dayListID(today), anchor: .top) }
                             }
                         }
-                        .frame(height: 260)
+                        // When we should fill, let the list take the available height; otherwise keep a compact height.
+                        .frame(maxHeight: shouldFill ? .infinity : 260, alignment: .top)
                         .transition(.asymmetric(
                             insertion: .move(edge: .top).combined(with: .opacity),
                             removal: .move(edge: .top).combined(with: .opacity)
@@ -346,6 +330,7 @@ private struct CalendarPanel: View {
 private struct InboxPanel: View {
     @ObservedObject var state: AppState
     @Binding var collapsed: Bool
+    var shouldFill: Bool
 
     // Local states
     @State private var newTaskText = ""
@@ -358,14 +343,32 @@ private struct InboxPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // HEADER stays fixed within this card
+            // Fixed header
             header
 
-            // CONTENT collapses downwards; header does not move
+            // Content collapses downward
             if !collapsed {
                 VStack(alignment: .leading, spacing: 8) {
                     inputRow
-                    listArea
+
+                    // List area grows to bottom when calendar collapses
+                    if state.unassignedTasks.isEmpty {
+                        CompatEmptyState(title: "No unassigned tasks", systemImage: "tray")
+                            .frame(maxWidth: .infinity, minHeight: 120, alignment: .top)
+                    } else {
+                        List {
+                            ForEach(state.unassignedTasks) { t in
+                                inboxRow(t)
+                                    .onDrag { NSItemProvider(object: NSString(string: "\(t.id)")) }
+                                    .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
+                                        handleInboxDrop(on: t, providers: providers)
+                                    })
+                            }
+                        }
+                        .listStyle(.inset)
+                        // Key: let the list stretch when we should fill, otherwise stay compact
+                        .frame(minHeight: 140, maxHeight: shouldFill ? .infinity : 300, alignment: .top)
+                    }
 
                     // Bulk action bar
                     if state.isBulkSelectActiveInbox, !state.selectedInboxTaskIds.isEmpty {
@@ -381,6 +384,8 @@ private struct InboxPanel: View {
                         .padding(.top, 6)
                     }
                 }
+                // Let the content column itself grow when needed
+                .frame(maxHeight: shouldFill ? .infinity : nil, alignment: .top)
                 .transition(.asymmetric(
                     insertion: .move(edge: .bottom).combined(with: .opacity),
                     removal: .move(edge: .bottom).combined(with: .opacity)
@@ -408,9 +413,7 @@ private struct InboxPanel: View {
     private var header: some View {
         HStack {
             Button {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                    collapsed.toggle()
-                }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { collapsed.toggle() }
             } label: {
                 Image(systemName: "chevron.down")
                     .rotationEffect(.degrees(collapsed ? -90 : 0)) // right when collapsed
@@ -429,7 +432,6 @@ private struct InboxPanel: View {
             }
             Spacer()
 
-            // Select / Cancel (toggles bulk-select mode)
             Button(state.isBulkSelectActiveInbox ? "Cancel" : "Select") {
                 state.toggleBulkSelectInbox()
             }
@@ -440,31 +442,8 @@ private struct InboxPanel: View {
         HStack(spacing: 8) {
             TextField("Add a new task…", text: $newTaskText, onCommit: addTask)
                 .textFieldStyle(.roundedBorder)
-            Button(action: addTask) {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var listArea: some View {
-        Group {
-            if state.unassignedTasks.isEmpty {
-                CompatEmptyState(title: "No unassigned tasks", systemImage: "tray")
-                    .frame(maxWidth: .infinity, minHeight: 120)
-            } else {
-                List {
-                    ForEach(state.unassignedTasks) { t in
-                        inboxRow(t)
-                            .onDrag { NSItemProvider(object: NSString(string: "\(t.id)")) }
-                            .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
-                                handleInboxDrop(on: t, providers: providers)
-                            })
-                    }
-                }
-                .listStyle(.inset)
-                .frame(minHeight: 140, maxHeight: 300)
-            }
+            Button(action: addTask) { Image(systemName: "plus") }
+                .buttonStyle(.borderedProminent)
         }
     }
 
@@ -503,15 +482,9 @@ private struct InboxPanel: View {
                 }
                 Spacer()
                 Menu {
-                    Button(role: .destructive) { state.deleteToTrash(t) } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    Button { state.duplicate(t) } label: {
-                        Label("Duplicate", systemImage: "plus.square.on.square")
-                    }
-                    Button { state.archiveTask(t) } label: {
-                        Label("Archive", systemImage: "archivebox")
-                    }
+                    Button(role: .destructive) { state.deleteToTrash(t) } label: { Label("Delete", systemImage: "trash") }
+                    Button { state.duplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                    Button { state.archiveTask(t) } label: { Label("Archive", systemImage: "archivebox") }
                 } label: {
                     Image(systemName: "ellipsis.circle").imageScale(.large).padding(4)
                 }
@@ -704,9 +677,7 @@ private struct DayModalView: View {
                     Menu("Actions") {
                         Button { bulkMoveToInbox(expanded: expanded) } label: { Label("Move to Inbox", systemImage: "tray") }
                         Button { bulkArchive(expanded: expanded) } label: { Label("Archive", systemImage: "archivebox") }
-                        Button("Delete Permanently", role: .destructive) {
-                            bulkDelete(expanded: expanded)
-                        }
+                        Button("Delete Permanently", role: .destructive) { bulkDelete(expanded: expanded) }
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -722,9 +693,7 @@ private struct DayModalView: View {
                 if isBulk {
                     Button {
                         if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                    } label: {
-                        Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square")
-                    }
+                    } label: { Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square") }
                 }
                 Text(t.text).font(.body).bold()
                 if t.isRecurring { Image(systemName: "repeat") }
@@ -843,9 +812,7 @@ private struct ArchivesView: View {
                             if isSelecting {
                                 Button {
                                     if selectedIds.contains(t.id) { selectedIds.remove(t.id) } else { selectedIds.insert(t.id) }
-                                } label: {
-                                    Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square")
-                                }
+                                } label: { Image(systemName: selectedIds.contains(t.id) ? "checkmark.square" : "square") }
                             }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(t.text).font(.body)
@@ -919,13 +886,11 @@ private struct StatsView: View {
                         DatePicker("From", selection: $customStart, displayedComponents: .date)
                         DatePicker("To", selection: $customEnd, displayedComponents: .date)
                     }
-                } label: {
-                    Label("Period", systemImage: "calendar")
-                }
+                } label: { Label("Period", systemImage: "calendar") }
                 .buttonStyle(.bordered)
             }
 
-            // KPI bars (Completed / Started / Open / Total)
+            // KPI bars
             let counts = aggregateCounts(in: range)
             KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
 
@@ -963,7 +928,7 @@ private struct StatsView: View {
                 }
             }
 
-            // Ratings breakdown (Open, Done, Deleted)
+            // Ratings breakdown
             GroupBox("Ratings in Period") {
                 let ratings = ratingsIn(range)
                 VStack(alignment: .leading, spacing: 8) {
@@ -978,7 +943,7 @@ private struct StatsView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // KPI helpers (scoped here to avoid "cannot find in scope")
+    // Helpers defined inside to avoid scope errors
     private func aggregateCounts(in range: ClosedRange<Date>) -> (completed: Int, started: Int, open: Int, total: Int) {
         func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
         var open = 0, started = 0, done = 0
@@ -1020,7 +985,6 @@ private struct StatsView: View {
                 if rating == .disliked { dD += 1 }
             }
         }
-        // Archived "deleted" items currently don’t carry ratings; left at 0.
         return (oL, oD, dL, dD, delL, delD)
     }
 }
