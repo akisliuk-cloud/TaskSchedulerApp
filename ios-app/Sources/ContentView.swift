@@ -35,11 +35,15 @@ struct ContentView: View {
     @State private var selectedModalIds = Set<Int>()
     @State private var showingMenu = false
     @State private var isDarkMode = false
-    @State private var showingSearch = false
+    @State private var showingSearch = false // kept for header; bottom search uses inline bar
 
     // Collapse states
     @State private var isCalendarCollapsed = false
     @State private var isInboxCollapsed = false
+
+    // Bottom navigation
+    enum BottomTab { case home, stats, camera, archive, search }
+    @State private var selectedTab: BottomTab = .home
 
     // Stats period controls
     enum Period: String, CaseIterable { case weekly, monthly, quarterly, semester, yearly, custom }
@@ -50,11 +54,28 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 16) {
             header
+
+            // Inline search bar — appears globally when Search tab is selected
+            if selectedTab == .search {
+                InlineSearchBar(
+                    text: $state.searchQuery,
+                    onClearAndHide: {
+                        state.searchQuery = ""
+                        selectedTab = .home // hide search bar per your spec
+                    }
+                )
+            }
+
             mainPanels
         }
         .padding()
         .frame(maxHeight: .infinity, alignment: .top) // top-pinned app
         .preferredColorScheme(isDarkMode ? .dark : .light)
+        .safeAreaInset(edge: .bottom) {
+            BottomNavBar(
+                selected: selectedTab,
+                onSelect: selectTab(_:))
+        }
         .sheet(item: $showingDay) { day in
             DayModalView(day: day, state: state,
                          isBulk: $isModalBulkSelect,
@@ -62,6 +83,7 @@ struct ContentView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showingSearch) {
+            // Header search (legacy behavior, unchanged). Bottom "Search" uses inline bar.
             SearchSheet(searchText: $state.searchQuery)
                 .presentationDetents([.fraction(0.25), .medium])
         }
@@ -70,18 +92,22 @@ struct ContentView: View {
                 searchText: $state.searchQuery,
                 isDarkMode: $isDarkMode,
                 gotoHome: {
+                    // From menu: go Home but DO NOT reset collapse states
                     state.isArchiveViewActive = false
                     state.isStatsViewActive = false
+                    selectedTab = .home
                     showingMenu = false
                 },
                 gotoArchives: {
                     state.isArchiveViewActive = true
                     state.isStatsViewActive = false
+                    selectedTab = .archive // do not auto-sync when header buttons used; but via menu it's explicit
                     showingMenu = false
                 },
                 gotoStats: {
                     state.isStatsViewActive = true
                     state.isArchiveViewActive = false
+                    selectedTab = .stats
                     showingMenu = false
                 }
             )
@@ -99,18 +125,21 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 10) {
+                // Keep legacy header search (sheet). Bottom-bar Search uses inline bar.
                 Button { showingSearch = true } label: { Image(systemName: "magnifyingglass").imageScale(.large) }
                     .accessibilityLabel("Search")
 
                 Button {
                     state.isStatsViewActive.toggle()
                     if state.isStatsViewActive { state.isArchiveViewActive = false }
+                    // Per your spec, bottom bar selection should NOT auto-sync when header toggles.
                 } label: { Image(systemName: "chart.bar").imageScale(.large) }
                     .accessibilityLabel("Stats")
 
                 Button {
                     state.isArchiveViewActive.toggle()
                     if state.isArchiveViewActive { state.isStatsViewActive = false }
+                    // No auto-sync to bottom-bar selection when header toggles.
                 } label: { Image(systemName: "archivebox").imageScale(.large) }
                     .accessibilityLabel("Archives")
 
@@ -126,7 +155,7 @@ struct ContentView: View {
         // Layout rules:
         // - Default (both expanded): Inbox fills the remainder.
         // - Calendar collapsed: Inbox fills remainder (shows more tasks).
-        // - Inbox collapsed: Calendar fills remainder (shows more dates in LIST mode; CARD view still stretches).
+        // - Inbox collapsed: Calendar fills remainder (List shows more; Card stretches).
         // - Both collapsed: Inbox card fills remaining space, content hidden.
         let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
         let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
@@ -163,7 +192,113 @@ struct ContentView: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
+
+    // MARK: - Bottom bar selection handler
+    private func selectTab(_ tab: BottomTab) {
+        selectedTab = tab
+        switch tab {
+        case .home:
+            // Navigate to Home (Calendar + Inbox), DO NOT reset collapse states
+            state.isStatsViewActive = false
+            state.isArchiveViewActive = false
+        case .stats:
+            state.isStatsViewActive = true
+            state.isArchiveViewActive = false
+        case .archive:
+            state.isArchiveViewActive = true
+            state.isStatsViewActive = false
+        case .search:
+            // Just show inline search bar globally; no other nav change
+            break
+        case .camera:
+            // Do nothing except selection (blue state)
+            break
+        }
+    }
 }
+
+// MARK: - Inline Search Bar (global, below header)
+private struct InlineSearchBar: View {
+    @Binding var text: String
+    var onClearAndHide: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .imageScale(.medium)
+                .foregroundStyle(.secondary)
+
+            TextField("Search tasks…", text: $text)
+                .textFieldStyle(.roundedBorder)
+
+            if !text.isEmpty {
+                Button {
+                    onClearAndHide()
+                } label: {
+                    Image(systemName: "xmark.circle.fill").imageScale(.medium)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search and hide")
+            } else {
+                Button {
+                    onClearAndHide()
+                } label: {
+                    Text("Cancel")
+                }
+                .accessibilityLabel("Hide search")
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Bottom Nav Bar
+private struct BottomNavBar: View {
+    let selected: ContentView.BottomTab
+    let onSelect: (ContentView.BottomTab) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack {
+                item(.home, label: "Home", systemImage: "house")
+                item(.stats, label: "Stats", systemImage: "chart.bar")
+                item(.camera, label: "Camera", systemImage: "camera")
+                item(.archive, label: "Archive", systemImage: "archivebox")
+                item(.search, label: "Search", systemImage: "magnifyingglass")
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .padding(.bottom, 10) // comfy tap target
+            .background(.ultraThinMaterial)
+        }
+    }
+
+    @ViewBuilder
+    private func item(_ tab: ContentView.BottomTab, label: String, systemImage: String) -> some View {
+        let isSel = (selected == tab)
+        Button {
+            onSelect(tab)
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: systemImage)
+                    .imageScale(.large)
+                Text(label)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(isSel ? Color.blue : Color.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+// =========================
+// The rest of your file is unchanged, except where noted earlier
+// =========================
 
 // MARK: - Calendar panel
 private struct CalendarPanel: View {
@@ -351,7 +486,6 @@ private struct InboxPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     inputRow
 
-                    // List area grows to bottom when calendar collapses
                     if state.unassignedTasks.isEmpty {
                         CompatEmptyState(title: "No unassigned tasks", systemImage: "tray")
                             .frame(maxWidth: .infinity, minHeight: 120, alignment: .top)
@@ -366,11 +500,9 @@ private struct InboxPanel: View {
                             }
                         }
                         .listStyle(.inset)
-                        // Key: let the list stretch when we should fill, otherwise stay compact
                         .frame(minHeight: 140, maxHeight: shouldFill ? .infinity : 300, alignment: .top)
                     }
 
-                    // Bulk action bar
                     if state.isBulkSelectActiveInbox, !state.selectedInboxTaskIds.isEmpty {
                         HStack {
                             Text("\(state.selectedInboxTaskIds.count) selected").font(.subheadline).bold()
@@ -384,14 +516,13 @@ private struct InboxPanel: View {
                         .padding(.top, 6)
                     }
                 }
-                // Let the content column itself grow when needed
                 .frame(maxHeight: shouldFill ? .infinity : nil, alignment: .top)
                 .transition(.asymmetric(
                     insertion: .move(edge: .bottom).combined(with: .opacity),
                     removal: .move(edge: .bottom).combined(with: .opacity)
                 ))
             } else if shouldFill {
-                // NEW: when collapsed AND we should fill (e.g., both collapsed),
+                // When collapsed AND we should fill (e.g., both collapsed),
                 // stretch the card to the bottom while keeping tasks hidden.
                 Spacer(minLength: 0)
             }
@@ -399,7 +530,6 @@ private struct InboxPanel: View {
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
         .onDrop(of: [.plainText], isTargeted: nil, perform: { providers in
-            // Dropping into empty space moves task to inbox
             guard let provider = providers.first else { return false }
             provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { data, _ in
                 guard
@@ -412,7 +542,6 @@ private struct InboxPanel: View {
             }
             return true
         })
-        // Allow the whole panel to expand when needed
         .frame(maxHeight: shouldFill ? .infinity : nil, alignment: .top)
     }
 
@@ -1024,7 +1153,7 @@ private struct KPIBars: View {
     }
 }
 
-// MARK: - Search & Menu Sheets
+// MARK: - Search & Menu Sheets (legacy header search kept)
 private struct SearchSheet: View {
     @Binding var searchText: String
     var body: some View {
