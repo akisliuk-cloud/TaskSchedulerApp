@@ -26,8 +26,33 @@ struct CompatEmptyState: View {
     }
 }
 
+// MARK: - Keyboard observer (keeps bottom bar above keyboard; header pinned)
+final class KeyboardObserver: ObservableObject {
+    @Published var height: CGFloat = 0
+    init() {
+        NotificationCenter.default.addObserver(self, selector: #selector(onChange(_:)),
+                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(onChange(_:)),
+                                               name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+    @objc private func onChange(_ note: Notification) {
+        guard let info = note.userInfo else { return }
+        let endFrame = (info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .zero
+        let screenMaxY = UIScreen.main.bounds.maxY
+        let overlap = max(0, screenMaxY - endFrame.origin.y)
+        let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        let curveRaw = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
+        let options = UIView.AnimationOptions(rawValue: curveRaw << 16)
+        UIView.animate(withDuration: duration, delay: 0, options: options) {
+            self.height = overlap
+        }
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+}
+
 struct ContentView: View {
     @StateObject private var state = AppState()
+    @StateObject private var keyboard = KeyboardObserver()
 
     // Sheets / modals
     @State private var showingDay: CalendarDay? = nil
@@ -35,7 +60,7 @@ struct ContentView: View {
     @State private var selectedModalIds = Set<Int>()
     @State private var showingMenu = false
     @State private var isDarkMode = false
-    @State private var showingSearch = false // legacy sheet (header button). Inline search is separate.
+    @State private var showingSearch = false // legacy header sheet (unchanged)
 
     // Collapse states
     @State private var isCalendarCollapsed = false
@@ -54,10 +79,13 @@ struct ContentView: View {
     @State private var customStart: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var customEnd: Date = Date()
 
+    // Bottom bar constant height used to reserve layout space
+    private let bottomBarHeight: CGFloat = 56
+
     var body: some View {
-        // Root layer keeps header pinned; content ignores keyboard pushes,
-        // while the bottom nav uses safeAreaInset so it sits above the keyboard.
+        // Root overlay stack: header stays pinned; bottom bar is an overlay that never disappears.
         ZStack(alignment: .top) {
+            // Main column (header + optional inline search + content panels)
             VStack(spacing: 16) {
                 header
 
@@ -67,7 +95,6 @@ struct ContentView: View {
                         text: $state.searchQuery,
                         isFocused: $isInlineSearchFocused,
                         onCancel: {
-                            // 1) Dismiss keyboard, 2) clear text, 3) hide bar (go Home)
                             isInlineSearchFocused = false
                             state.searchQuery = ""
                             selectedTab = .home
@@ -79,19 +106,22 @@ struct ContentView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            // Critical: prevent the keyboard from pushing the whole app up (keeps header pinned).
+            // Keep header pinned: never let keyboard push this whole column.
             .ignoresSafeArea(.keyboard, edges: .bottom)
+            // Ensure content never sits under the bottom bar (and moves up when keyboard is visible)
+            .padding(.bottom, bottomBarHeight + max(0, keyboard.height))
         }
         .preferredColorScheme(isDarkMode ? .dark : .light)
-        // Bottom nav is injected at the root; it stays visible and floats above keyboard.
-        .safeAreaInset(edge: .bottom) {
-            BottomNavBar(
-                selected: selectedTab,
-                onSelect: selectTab(_:)
-            )
-            .zIndex(10)
+        // Pinned bottom bar: overlay anchored to bottom, raised above keyboard
+        .overlay(alignment: .bottom) {
+            BottomNavBar(selected: selectedTab, onSelect: selectTab(_:))
+                .padding(.bottom, max(0, keyboard.height))
+                .background(.ultraThinMaterial)
+                .frame(maxWidth: .infinity, height: bottomBarHeight, alignment: .center)
+                .overlay(Divider().frame(maxWidth: .infinity).offset(y: -bottomBarHeight/2), alignment: .top)
+                .zIndex(1000)
         }
-        // Sheets unchanged
+        // Sheets remain unchanged
         .sheet(item: $showingDay) { day in
             DayModalView(day: day, state: state,
                          isBulk: $isModalBulkSelect,
@@ -129,7 +159,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Header (compact — icons only on right; always pinned)
+    // MARK: Header (ALWAYS pinned)
     private var header: some View {
         HStack(spacing: 12) {
             Text("TaskMate")
@@ -139,7 +169,7 @@ struct ContentView: View {
             Spacer()
 
             HStack(spacing: 10) {
-                // Legacy sheet search (kept). Bottom-bar Search uses inline bar.
+                // Legacy sheet (kept). Inline search is driven by bottom-bar "Search".
                 Button { showingSearch = true } label: {
                     Image(systemName: "magnifyingglass").imageScale(.large)
                 }
@@ -148,7 +178,6 @@ struct ContentView: View {
                 Button {
                     state.isStatsViewActive.toggle()
                     if state.isStatsViewActive { state.isArchiveViewActive = false }
-                    // Per spec, bottom bar selection does NOT auto-sync from header toggles.
                 } label: {
                     Image(systemName: "chart.bar").imageScale(.large)
                 }
@@ -171,13 +200,8 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Main panels (kept as before — header stays pinned)
+    // MARK: Main panels
     private var mainPanels: some View {
-        // Layout rules remain:
-        // - Default (both expanded): Inbox fills the remainder.
-        // - Calendar collapsed: Inbox fills remainder.
-        // - Inbox collapsed: Calendar fills remainder (List grows; Card stretches).
-        // - Both collapsed: Inbox card fills remaining space, content hidden.
         let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
         let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
         let expandInboxDefault = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
@@ -214,31 +238,28 @@ struct ContentView: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    // MARK: - Bottom bar selection handler
+    // MARK: Bottom bar actions (Stats/Archive behave the same way)
     private func selectTab(_ tab: BottomTab) {
         selectedTab = tab
         switch tab {
         case .home:
-            // Navigate to Home (Calendar + Inbox), DO NOT reset collapse states
             state.isStatsViewActive = false
             state.isArchiveViewActive = false
         case .stats:
             state.isStatsViewActive = true
             state.isArchiveViewActive = false
         case .archive:
-            state.isArchiveViewActive = true
+            state.isArchiveViewActive = true     // identical to Stats in behavior
             state.isStatsViewActive = false
         case .search:
-            // Show inline search; give it focus so keyboard appears
-            isInlineSearchFocused = true
+            isInlineSearchFocused = true         // focus text field so keyboard comes up
         case .camera:
-            // Selected-only — no action
-            break
+            break                                // selected-only (turns blue)
         }
     }
 }
 
-// MARK: - Inline Search Bar (global, below header; does not move header)
+// MARK: - Inline Search Bar (global, below pinned header)
 private struct InlineSearchBar: View {
     @Binding var text: String
     @FocusState.Binding var isFocused: Bool
@@ -252,65 +273,50 @@ private struct InlineSearchBar: View {
 
             TextField("Search tasks…", text: $text)
                 .textFieldStyle(.roundedBorder)
-                .focused($isFocused) // focus drives keyboard
+                .focused($isFocused)
                 .submitLabel(.search)
 
             if !text.isEmpty {
-                Button {
-                    onCancel() // clear + hide + dismiss in parent
-                } label: {
+                Button(action: onCancel) {
                     Image(systemName: "xmark.circle.fill").imageScale(.medium)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search and hide")
             } else {
-                Button {
-                    onCancel()
-                } label: {
-                    Text("Cancel")
-                }
-                .accessibilityLabel("Hide search")
+                Button("Cancel", action: onCancel)
+                    .accessibilityLabel("Hide search")
             }
         }
         .padding(.vertical, 6)
     }
 }
 
-// MARK: - Bottom Nav Bar (always pinned; single selection highlight)
+// MARK: - Bottom Nav Bar (overlay; never disappears; single selection highlight)
 private struct BottomNavBar: View {
     let selected: ContentView.BottomTab
     let onSelect: (ContentView.BottomTab) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack {
-                item(.home, label: "Home", systemImage: "house")
-                item(.stats, label: "Stats", systemImage: "chart.bar")
-                item(.camera, label: "Camera", systemImage: "camera")
-                item(.archive, label: "Archive", systemImage: "archivebox")
-                item(.search, label: "Search", systemImage: "magnifyingglass")
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
-            .background(.ultraThinMaterial)
+        HStack {
+            item(.home, label: "Home", systemImage: "house")
+            item(.stats, label: "Stats", systemImage: "chart.bar")
+            item(.camera, label: "Camera", systemImage: "camera")
+            item(.archive, label: "Archive", systemImage: "archivebox")
+            item(.search, label: "Search", systemImage: "magnifyingglass")
         }
-        .background(.clear)
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(.ultraThinMaterial) // background also applied by parent overlay
     }
 
     @ViewBuilder
     private func item(_ tab: ContentView.BottomTab, label: String, systemImage: String) -> some View {
         let isSel = (selected == tab)
-        Button {
-            onSelect(tab)
-        } label: {
+        Button { onSelect(tab) } label: {
             VStack(spacing: 2) {
-                Image(systemName: systemImage)
-                    .imageScale(.large)
-                Text(label)
-                    .font(.caption2.weight(isSel ? .semibold : .regular))
-                    .lineLimit(1)
+                Image(systemName: systemImage).imageScale(.large)
+                Text(label).font(.caption2.weight(isSel ? .semibold : .regular)).lineLimit(1)
             }
             .frame(maxWidth: .infinity)
             .foregroundStyle(isSel ? Color.blue : Color.secondary)
@@ -321,7 +327,9 @@ private struct BottomNavBar: View {
     }
 }
 
-// ======= Panels below remain as in your last working version (minor layout safety retained) =======
+// =========================
+// Panels and views below are unchanged, except for the injected params.
+// =========================
 
 // MARK: - Calendar panel
 private struct CalendarPanel: View {
@@ -393,7 +401,6 @@ private struct CalendarPanel: View {
                 let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
 
                 if state.calendarViewMode == .card {
-                    // Horizontal cards (stretch vertically when shouldFill is true)
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
@@ -424,7 +431,6 @@ private struct CalendarPanel: View {
                         removal: .move(edge: .top).combined(with: .opacity)
                     ))
                 } else {
-                    // LIST mode: allow vertical growth when the inbox is collapsed.
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(spacing: 6) {
@@ -545,9 +551,7 @@ private struct InboxPanel: View {
                     removal: .move(edge: .bottom).combined(with: .opacity)
                 ))
             } else if shouldFill {
-                // When collapsed AND we should fill (e.g., both collapsed),
-                // stretch the card to the bottom while keeping tasks hidden.
-                Spacer(minLength: 0)
+                Spacer(minLength: 0) // fill while hidden (both-collapsed illusion)
             }
         }
         .padding()
@@ -873,7 +877,7 @@ private struct DayModalView: View {
                 Menu {
                     Button(role: .destructive) { state.deleteToTrash(t) } label: { Label("Delete", systemImage: "trash") }
                     Button { state.moveToInbox(t) } label: { Label("Move to Inbox", systemImage: "tray") }
-                    Button { state.duplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                    Button { state.uplicate(t) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
                     Button { state.archiveTask(t) } label: { Label("Archive", systemImage: "archivebox") }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
@@ -1101,7 +1105,7 @@ private struct StatsView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // Helpers defined inside to avoid scope errors
+    // Helpers inline to avoid scope/visibility issues
     private func aggregateCounts(in range: ClosedRange<Date>) -> (completed: Int, started: Int, open: Int, total: Int) {
         func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
         var open = 0, started = 0, done = 0
