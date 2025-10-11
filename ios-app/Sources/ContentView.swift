@@ -126,7 +126,7 @@ struct ContentView: View {
         // Layout rules:
         // - Default (both expanded): Inbox fills the remainder.
         // - Calendar collapsed: Inbox fills remainder (shows more tasks).
-        // - Inbox collapsed: Calendar fills remainder (shows more dates in LIST mode).
+        // - Inbox collapsed: Calendar fills remainder (shows more dates in LIST mode; CARD view still stretches as required).
         // - Both collapsed: Inbox card fills space (background only), content hidden.
         let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
         let expandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
@@ -235,7 +235,7 @@ private struct CalendarPanel: View {
                 let tasksByDay = Dictionary(grouping: expanded) { $0.date ?? "" }
 
                 if state.calendarViewMode == .card {
-                    // Horizontal cards: keep natural height (vertical fill doesn't reveal more)
+                    // Horizontal cards: now also stretch vertically when shouldFill is true
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
@@ -259,6 +259,8 @@ private struct CalendarPanel: View {
                                 withAnimation { proxy.scrollTo(dayCardID(today), anchor: .leading) }
                             }
                         }
+                        // ⬇️ NEW: stretch the scroll area vertically when filling
+                        .frame(maxHeight: shouldFill ? .infinity : nil, alignment: .top)
                     }
                     .transition(.asymmetric(
                         insertion: .move(edge: .top).combined(with: .opacity),
@@ -294,7 +296,6 @@ private struct CalendarPanel: View {
                                 withAnimation { proxy.scrollTo(dayListID(today), anchor: .top) }
                             }
                         }
-                        // When we should fill, let the list take the available height; otherwise keep a compact height.
                         .frame(maxHeight: shouldFill ? .infinity : 260, alignment: .top)
                         .transition(.asymmetric(
                             insertion: .move(edge: .top).combined(with: .opacity),
