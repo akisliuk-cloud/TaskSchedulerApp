@@ -53,6 +53,8 @@ struct ContentView: View {
             mainPanels
         }
         .padding()
+        // PINS the whole interface to the top; no vertical centering when content shrinks
+        .frame(maxHeight: .infinity, alignment: .top)
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .sheet(item: $showingDay) { day in
             DayModalView(day: day, state: state,
@@ -130,12 +132,11 @@ struct ContentView: View {
 
     // MARK: Main panels
     private var mainPanels: some View {
-        // Dynamic expansion rules:
+        // Expansion rules:
         // - Default (both expanded): Inbox expands.
         // - Calendar collapsed: Inbox expands.
         // - Inbox collapsed: Calendar expands.
-        // - Both collapsed: both show header + internal empty space (illusion).
-        let bothCollapsed = isCalendarCollapsed && isInboxCollapsed
+        // - Both collapsed: neither expands (just headers), no internal placeholders.
         let shouldExpandCalendar = (!isCalendarCollapsed && isInboxCollapsed && !state.isArchiveViewActive && !state.isStatsViewActive)
         let shouldExpandInbox = (!isInboxCollapsed && !(state.isArchiveViewActive || state.isStatsViewActive))
 
@@ -153,8 +154,7 @@ struct ContentView: View {
                 } else {
                     CalendarPanel(
                         state: state,
-                        collapsed: $isCalendarCollapsed,
-                        showPlaceholderWhenCollapsed: bothCollapsed
+                        collapsed: $isCalendarCollapsed
                     ) { day in
                         showingDay = day
                     }
@@ -166,13 +166,14 @@ struct ContentView: View {
             if !(state.isArchiveViewActive || state.isStatsViewActive) {
                 InboxPanel(
                     state: state,
-                    collapsed: $isInboxCollapsed,
-                    showPlaceholderWhenCollapsed: bothCollapsed
+                    collapsed: $isInboxCollapsed
                 )
                 // Inbox expands by default and when Calendar is collapsed
                 .frame(maxHeight: shouldExpandInbox ? .infinity : nil)
             }
         }
+        // Make sure the panels column itself is pinned to top as well
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -180,12 +181,7 @@ struct ContentView: View {
 private struct CalendarPanel: View {
     @ObservedObject var state: AppState
     @Binding var collapsed: Bool
-    /// Only show internal placeholder space when both sections are collapsed (illusion case)
-    var showPlaceholderWhenCollapsed: Bool
     var openDay: (CalendarDay) -> Void
-
-    // Internal placeholder height for illusion state
-    private let collapsedPlaceholderHeight: CGFloat = 60
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -202,7 +198,7 @@ private struct CalendarPanel: View {
                         .imageScale(.medium)
                         .padding(.trailing, 2)
                 }
-                .accessibilityLabel(collapsed ? "Expand Calendar" : "Collapse Calendar")
+                .accessibilityLabel(collapsed ? "Expand Daily Calendar" : "Collapse Daily Calendar")
 
                 Text("Daily Calendar").font(.title3).bold()
                 Spacer()
@@ -319,9 +315,6 @@ private struct CalendarPanel: View {
                         ))
                     }
                 }
-            } else if showPlaceholderWhenCollapsed {
-                // Only in BOTH-collapsed state, reserve empty area inside this card
-                Color.clear.frame(height: collapsedPlaceholderHeight)
             }
         }
         .padding()
@@ -350,11 +343,6 @@ private struct CalendarPanel: View {
 private struct InboxPanel: View {
     @ObservedObject var state: AppState
     @Binding var collapsed: Bool
-    /// Only show internal placeholder space when both sections are collapsed (illusion case)
-    var showPlaceholderWhenCollapsed: Bool
-
-    // Internal placeholder height for illusion state
-    private let collapsedPlaceholderHeight: CGFloat = 80
 
     // Local states
     @State private var newTaskText = ""
@@ -394,9 +382,6 @@ private struct InboxPanel: View {
                     insertion: .move(edge: .bottom).combined(with: .opacity),
                     removal: .move(edge: .bottom).combined(with: .opacity)
                 ))
-            } else if showPlaceholderWhenCollapsed {
-                // Only in BOTH-collapsed state, reserve empty area inside this card
-                Color.clear.frame(height: collapsedPlaceholderHeight)
             }
         }
         .padding()
@@ -430,7 +415,7 @@ private struct InboxPanel: View {
                     .imageScale(.medium)
                     .padding(.trailing, 2)
             }
-            .accessibilityLabel(collapsed ? "Expand Inbox" : "Collapse Inbox")
+            .accessibilityLabel(collapsed ? "Expand Task Inbox" : "Collapse Task Inbox")
 
             Text("Task Inbox").font(.title3).bold()
             if !state.unassignedTasks.isEmpty {
@@ -937,7 +922,7 @@ private struct StatsView: View {
                 .buttonStyle(.bordered)
             }
 
-            // KPI bars (Completed / Started / Open / Total)
+            // KPI bars
             let counts = aggregateCounts(in: range)
             KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
 
@@ -975,7 +960,7 @@ private struct StatsView: View {
                 }
             }
 
-            // Ratings breakdown (Open, Done, Deleted)
+            // Ratings breakdown
             GroupBox("Ratings in Period") {
                 let ratings = ratingsIn(range)
                 VStack(alignment: .leading, spacing: 8) {
@@ -990,7 +975,7 @@ private struct StatsView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // KPI helpers (unchanged)
+    // KPI helpers
     private func aggregateCounts(in range: ClosedRange<Date>) -> (completed: Int, started: Int, open: Int, total: Int) {
         func within(_ ds: String?) -> Bool { ds?.asISODateOnlyUTC.map(range.contains) ?? false }
         var open = 0, started = 0, done = 0
