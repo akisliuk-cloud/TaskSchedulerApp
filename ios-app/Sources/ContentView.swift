@@ -952,75 +952,77 @@ private struct StatsView: View {
         let range = periodRange()
         let (series, _) = state.weeklySeries(lastWeeks: 8)
 
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Stats").font(.title2).bold()
-                Spacer()
-                Menu {
-                    Picker("Period", selection: $period) {
-                        ForEach(ContentView.Period.allCases, id: \.self) { p in
-                            Text(p.rawValue.capitalized).tag(p)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Stats").font(.title2).bold()
+                    Spacer()
+                    Menu {
+                        Picker("Period", selection: $period) {
+                            ForEach(ContentView.Period.allCases, id: \.self) { p in
+                                Text(p.rawValue.capitalized).tag(p)
+                            }
                         }
-                    }
-                    if period == .custom {
-                        Divider()
-                        DatePicker("From", selection: $customStart, displayedComponents: .date)
-                        DatePicker("To", selection: $customEnd, displayedComponents: .date)
-                    }
-                } label: { Label("Period", systemImage: "calendar") }
-                .buttonStyle(.bordered)
-            }
-
-            // KPI bars
-            let counts = aggregateCounts(in: range)
-            KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
-
-            // Bar chart (rolling 8 weeks)
-            GroupBox("Last 8 weeks (trend)") {
-                if #available(iOS 16.0, *) {
-                    Chart {
-                        ForEach(series, id: \.label) { w in
-                            BarMark(x: .value("Week", w.label), y: .value("Completed", w.completed))
-                            BarMark(x: .value("Week", w.label), y: .value("Open", w.open))
-                                .foregroundStyle(.orange)
+                        if period == .custom {
+                            Divider()
+                            DatePicker("From", selection: $customStart, displayedComponents: .date)
+                            DatePicker("To", selection: $customEnd, displayedComponents: .date)
                         }
-                    }
-                    .frame(height: 220)
-                } else {
-                    Text("Charts requires iOS 16+.").frame(height: 60)
+                    } label: { Label("Period", systemImage: "calendar") }
+                    .buttonStyle(.bordered)
                 }
-            }
 
-            // Completed tasks in period
-            GroupBox("Completed Tasks in Period") {
-                let completed = completedTasks(in: range)
-                if completed.isEmpty {
-                    Text("No completed tasks in this period.").foregroundStyle(.secondary)
-                } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(completed, id: \.id) { t in
-                            HStack {
-                                Text(t.text).font(.subheadline)
-                                Spacer()
-                                Text(t.date ?? "").font(.caption).foregroundStyle(.secondary)
+                GroupBox("Overview") {
+                    let counts = aggregateCounts(in: range)
+                    KPIBars(completed: counts.completed, started: counts.started, open: counts.open, total: counts.total)
+                }
+
+                GroupBox("Last 8 weeks (trend)") {
+                    if #available(iOS 16.0, *) {
+                        Chart {
+                            ForEach(series, id: \.label) { w in
+                                BarMark(x: .value("Week", w.label), y: .value("Completed", w.completed))
+                                BarMark(x: .value("Week", w.label), y: .value("Open", w.open))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .frame(height: 220)
+                    } else {
+                        Text("Charts requires iOS 16+.").frame(height: 60)
+                    }
+                }
+
+                GroupBox("Completed Tasks in Period") {
+                    let completed = completedTasks(in: range)
+                    if completed.isEmpty {
+                        Text("No completed tasks in this period.").foregroundStyle(.secondary)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(completed, id: \.id) { t in
+                                HStack {
+                                    Text(t.text).font(.subheadline)
+                                    Spacer()
+                                    Text(t.date ?? "").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // Ratings breakdown
-            GroupBox("Ratings in Period") {
-                let ratings = ratingsIn(range)
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack { Text("Open").frame(width: 80, alignment: .leading); Text("👍 \(ratings.openLiked)"); Text("👎 \(ratings.openDisliked)") }
-                    HStack { Text("Done").frame(width: 80, alignment: .leading); Text("👍 \(ratings.doneLiked)"); Text("👎 \(ratings.doneDisliked)") }
-                    HStack { Text("Deleted").frame(width: 80, alignment: .leading); Text("👍 \(ratings.deletedLiked)"); Text("👎 \(ratings.deletedDisliked)") }
+                GroupBox("Ratings in Period") {
+                    let ratings = ratingsIn(range)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack { Text("Open").frame(width: 80, alignment: .leading); Text("👍 \(ratings.openLiked)"); Text("👎 \(ratings.openDisliked)") }
+                        HStack { Text("Done").frame(width: 80, alignment: .leading); Text("👍 \(ratings.doneLiked)"); Text("👎 \(ratings.doneDisliked)") }
+                        HStack { Text("Deleted").frame(width: 80, alignment: .leading); Text("👍 \(ratings.deletedLiked)"); Text("👎 \(ratings.deletedDisliked)") }
+                    }
+                    .font(.subheadline)
                 }
-                .font(.subheadline)
+                .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding()
+        .scrollIndicators(.hidden)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
