@@ -69,36 +69,11 @@ struct ContentView: View {
             SearchSheet(searchText: $state.searchQuery)
                 .presentationDetents([.fraction(0.25), .medium])
         }
-        .sheet(isPresented: $showingMenu) {
-            MenuSheet(
-                searchText: $state.searchQuery,
-                isDarkMode: $isDarkMode,
-                gotoHome: {
-                    state.isArchiveViewActive = false
-                    state.isStatsViewActive = false
-                    showingMenu = false
-                    selectedBottom = .home // optional sync when using menu
-                },
-                gotoArchives: {
-                    state.isArchiveViewActive = true
-                    state.isStatsViewActive = false
-                    showingMenu = false
-                    // per your spec, bottom selection should not auto-sync from header/menu
-                },
-                gotoStats: {
-                    state.isStatsViewActive = true
-                    state.isArchiveViewActive = false
-                    showingMenu = false
-                    // per your spec, bottom selection should not auto-sync from header/menu
-                }
-            )
-            .presentationDetents([.fraction(0.45), .large])
-        }
         // Pinned bottom navigation bar
         .safeAreaInset(edge: .bottom) { bottomBar }
     }
 
-    // MARK: Header (compact — icons only on right)
+    // MARK: Header
     private var header: some View {
         HStack(spacing: 12) {
             Text("TaskMate")
@@ -106,29 +81,6 @@ struct ContentView: View {
                 .bold()
 
             Spacer()
-
-            HStack(spacing: 10) {
-                Button { showingSearch = true } label: { Image(systemName: "magnifyingglass").imageScale(.large) }
-                    .accessibilityLabel("Search")
-
-                Button {
-                    state.isStatsViewActive.toggle()
-                    if state.isStatsViewActive { state.isArchiveViewActive = false }
-                    // per your spec, do NOT auto-select the bottom bar when toggled from here
-                } label: { Image(systemName: "chart.bar").imageScale(.large) }
-                    .accessibilityLabel("Stats")
-
-                Button {
-                    state.isArchiveViewActive.toggle()
-                    if state.isArchiveViewActive { state.isStatsViewActive = false }
-                    // per your spec, do NOT auto-select the bottom bar when toggled from here
-                } label: { Image(systemName: "archivebox").imageScale(.large) }
-                    .accessibilityLabel("Archives")
-
-                Button { showingMenu = true } label: { Image(systemName: "line.3.horizontal").imageScale(.large) }
-                    .accessibilityLabel("Menu")
-            }
-            .buttonStyle(.bordered)
         }
     }
 
