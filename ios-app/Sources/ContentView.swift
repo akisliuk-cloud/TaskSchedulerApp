@@ -1,4 +1,235 @@
-// ios-app/Sources/ContentView.swift
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/ios-app/Sources/ContentView.swift b/ios-app/Sources/ContentView.swift
+index d15fdf6e03bde085bd5a75aa4960787eba133251..cf246c9fa92810e73fdc0e7b9a069be2422b3a6c 100644
+--- a/ios-app/Sources/ContentView.swift
++++ b/ios-app/Sources/ContentView.swift
+@@ -7,108 +7,117 @@ import Charts
+ private func dayCardID(_ dateStr: String) -> String { "card-\(dateStr)" }
+ private func dayListID(_ dateStr: String) -> String { "list-\(dateStr)" }
+ 
+ // MARK: - Reusable empty state
+ struct CompatEmptyState: View {
+     let title: String
+     let systemImage: String
+     var body: some View {
+         Group {
+             if #available(iOS 17.0, *) {
+                 ContentUnavailableView(title, systemImage: systemImage)
+             } else {
+                 VStack(spacing: 12) {
+                     Image(systemName: systemImage).font(.system(size: 40)).foregroundColor(.secondary)
+                     Text(title).font(.headline).foregroundColor(.secondary)
+                 }
+                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+             }
+         }
+     }
+ }
+ 
+ struct ContentView: View {
+     @StateObject private var state = AppState()
+ 
++    private enum BottomTab: Hashable {
++        case home, stats, camera, archive, search
++    }
++
+     // Sheets / modals
+     @State private var showingDay: CalendarDay? = nil
+     @State private var isModalBulkSelect = false
+     @State private var selectedModalIds = Set<Int>()
+     @State private var showingMenu = false
+     @State private var isDarkMode = false
+     @State private var showingSearch = false
+ 
+     // Collapse states
+     @State private var isCalendarCollapsed = false
+     @State private var isInboxCollapsed = false
+ 
+     // Stats period controls
+     enum Period: String, CaseIterable { case weekly, monthly, quarterly, semester, yearly, custom }
+     @State private var statsPeriod: Period = .weekly
+     @State private var customStart: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+     @State private var customEnd: Date = Date()
+ 
++    @State private var selectedBottomTab: BottomTab = .home
++
+     var body: some View {
+         VStack(spacing: 16) {
+             header
+             mainPanels
+         }
+         .padding()
+         .frame(maxHeight: .infinity, alignment: .top) // top-pinned app
+         .preferredColorScheme(isDarkMode ? .dark : .light)
+         .sheet(item: $showingDay) { day in
+             DayModalView(day: day, state: state,
+                          isBulk: $isModalBulkSelect,
+                          selectedIds: $selectedModalIds)
+                 .presentationDetents([.medium, .large])
+         }
+         .sheet(isPresented: $showingSearch) {
+             SearchSheet(searchText: $state.searchQuery)
+                 .presentationDetents([.fraction(0.25), .medium])
+         }
+         .sheet(isPresented: $showingMenu) {
+             MenuSheet(
+                 searchText: $state.searchQuery,
+                 isDarkMode: $isDarkMode,
+                 gotoHome: {
+                     state.isArchiveViewActive = false
+                     state.isStatsViewActive = false
+                     showingMenu = false
+                 },
+                 gotoArchives: {
+                     state.isArchiveViewActive = true
+                     state.isStatsViewActive = false
+                     showingMenu = false
+                 },
+                 gotoStats: {
+                     state.isStatsViewActive = true
+                     state.isArchiveViewActive = false
+                     showingMenu = false
+                 }
+             )
+             .presentationDetents([.fraction(0.45), .large])
+         }
++        .safeAreaInset(edge: .bottom) {
++            bottomBar
++        }
+     }
+ 
+     // MARK: Header (compact — icons only on right)
+     private var header: some View {
+         HStack(spacing: 12) {
+             Text("TaskMate")
+                 .font(.title)
+                 .bold()
+ 
+             Spacer()
+ 
+             HStack(spacing: 10) {
+                 Button { showingSearch = true } label: { Image(systemName: "magnifyingglass").imageScale(.large) }
+                     .accessibilityLabel("Search")
+ 
+                 Button {
+                     state.isStatsViewActive.toggle()
+                     if state.isStatsViewActive { state.isArchiveViewActive = false }
+                 } label: { Image(systemName: "chart.bar").imageScale(.large) }
+                     .accessibilityLabel("Stats")
+ 
+                 Button {
+                     state.isArchiveViewActive.toggle()
+                     if state.isArchiveViewActive { state.isStatsViewActive = false }
+                 } label: { Image(systemName: "archivebox").imageScale(.large) }
+@@ -141,50 +150,106 @@ struct ContentView: View {
+                 } else if state.isArchiveViewActive {
+                     ArchivesView(state: state)
+                 } else {
+                     CalendarPanel(
+                         state: state,
+                         collapsed: $isCalendarCollapsed,
+                         shouldFill: expandCalendar
+                     ) { day in
+                         showingDay = day
+                     }
+                     .frame(maxHeight: expandCalendar ? .infinity : nil, alignment: .top)
+                 }
+             }
+ 
+             if !(state.isArchiveViewActive || state.isStatsViewActive) {
+                 InboxPanel(
+                     state: state,
+                     collapsed: $isInboxCollapsed,
+                     shouldFill: expandInbox
+                 )
+                 .frame(maxHeight: expandInbox ? .infinity : nil, alignment: .top)
+             }
+         }
+         .frame(maxHeight: .infinity, alignment: .top)
+     }
++
++    // MARK: Bottom navigation bar
++    private var bottomBar: some View {
++        VStack(spacing: 0) {
++            Divider()
++
++            HStack(spacing: 0) {
++                bottomBarButton(title: "Home", systemImage: "house", isSelected: selectedBottomTab == .home) {
++                    selectedBottomTab = .home
++                    state.isStatsViewActive = false
++                    state.isArchiveViewActive = false
++                }
++
++                bottomBarButton(title: "Stats", systemImage: "chart.bar", isSelected: selectedBottomTab == .stats) {
++                    selectedBottomTab = .stats
++                    state.isStatsViewActive = true
++                    state.isArchiveViewActive = false
++                }
++
++                bottomBarButton(title: "Camera", systemImage: "camera", isSelected: selectedBottomTab == .camera) {
++                    selectedBottomTab = .camera
++                }
++
++                bottomBarButton(title: "Archive", systemImage: "archivebox", isSelected: selectedBottomTab == .archive) {
++                    selectedBottomTab = .archive
++                    state.isArchiveViewActive = true
++                    state.isStatsViewActive = false
++                }
++
++                bottomBarButton(title: "Search", systemImage: "magnifyingglass", isSelected: selectedBottomTab == .search) {
++                    selectedBottomTab = .search
++                    showingSearch = true
++                }
++            }
++            .padding(.horizontal, 16)
++            .padding(.top, 10)
++            .padding(.bottom, 12)
++        }
++        .background(.regularMaterial)
++    }
++
++    private func bottomBarButton(title: String, systemImage: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
++        Button(action: action) {
++            VStack(spacing: 4) {
++                Image(systemName: systemImage)
++                    .font(.system(size: 18, weight: .semibold))
++                Text(title)
++                    .font(.system(size: 11))
++                    .fontWeight(isSelected ? .semibold : .regular)
++            }
++            .frame(maxWidth: .infinity)
++            .foregroundColor(isSelected ? Color.accentColor : Color.primary)
++            .padding(.vertical, 4)
++        }
++        .buttonStyle(.plain)
++    }
+ }
+ 
+ // MARK: - Calendar panel
+ private struct CalendarPanel: View {
+     @ObservedObject var state: AppState
+     @Binding var collapsed: Bool
+     var shouldFill: Bool
+     var openDay: (CalendarDay) -> Void
+ 
+     var body: some View {
+         VStack(alignment: .leading, spacing: 10) {
+             // Fixed header
+             HStack {
+                 Button {
+                     withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { collapsed.toggle() }
+                 } label: {
+                     Image(systemName: "chevron.down")
+                         .rotationEffect(.degrees(collapsed ? -90 : 0)) // right when collapsed
+                         .animation(.easeInOut, value: collapsed)
+                         .imageScale(.medium)
+                         .padding(.trailing, 2)
+                 }
+                 .accessibilityLabel(collapsed ? "Expand Daily Calendar" : "Collapse Daily Calendar")
+ 
+                 Text("Daily Calendar").font(.title3).bold() 
+EOF
+)// ios-app/Sources/ContentView.swift
 import SwiftUI
 import Foundation
 import Charts
